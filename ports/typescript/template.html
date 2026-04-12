@@ -429,7 +429,7 @@
             badge.className='stat-item rank-'+rank.cls;
             badge.style.borderRight='none';
             badge.style.textAlign='center';
-            badge.innerHTML=`<div class="stat-label">Yegge Level</div><div class="rank-title" style="font-size:22px">${rank.name}</div><div class="rank-subtitle" style="font-size:10px;margin-top:2px">${esc(rank.title)}</div><div class="rank-score" title="${esc(reason)}">${esc(reason)}</div>`;
+            badge.innerHTML=`<div class="stat-label"><a href="https://addyosmani.com/blog/code-agent-orchestra/" target="_blank" style="color:var(--text-muted);text-decoration:none;border-bottom:1px dashed var(--text-muted)">Yegge Level</a></div><div class="rank-title" style="font-size:22px">${rank.name}</div><div class="rank-subtitle" style="font-size:10px;margin-top:2px">${esc(rank.title)}</div><div class="rank-score" title="${esc(reason)}">${esc(reason)}</div>`;
         }
 
         function renderRecommendations(){
