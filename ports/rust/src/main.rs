@@ -57,9 +57,16 @@ struct Cli {
 }
 
 fn open_in_browser(filepath: &PathBuf) {
-    let _ = Command::new("open")
-        .arg(filepath.to_string_lossy().as_ref())
-        .spawn();
+    let path = filepath.to_string_lossy().to_string();
+    if cfg!(target_os = "macos") {
+        let _ = Command::new("open").arg(&path).spawn();
+    } else if cfg!(target_os = "linux") {
+        let _ = Command::new("xdg-open").arg(&path).spawn();
+    } else if cfg!(target_os = "windows") {
+        let _ = Command::new("cmd").args(["/C", "start", &path]).spawn();
+    } else {
+        let _ = Command::new("open").arg(&path).spawn();
+    }
 }
 
 fn main() {

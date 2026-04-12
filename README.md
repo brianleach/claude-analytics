@@ -64,6 +64,7 @@ cd ports/go
 go build -o claude-analytics .
 ./claude-analytics
 ```
+Note: Go uses single-dash flags (`-no-api`, `-no-open`, `-output`, `-claude-dir`).
 
 **Rust**:
 ```bash

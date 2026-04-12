@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 )
 
@@ -78,7 +79,17 @@ func loadEnvFile() {
 }
 
 func openInBrowser(fpath string) {
-	cmd := exec.Command("open", fpath)
+	var cmd *exec.Cmd
+	switch runtime.GOOS {
+	case "darwin":
+		cmd = exec.Command("open", fpath)
+	case "linux":
+		cmd = exec.Command("xdg-open", fpath)
+	case "windows":
+		cmd = exec.Command("cmd", "/c", "start", fpath)
+	default:
+		cmd = exec.Command("open", fpath)
+	}
 	cmd.Run()
 }
 

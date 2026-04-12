@@ -20,6 +20,10 @@ test:
 benchmark:
 	./benchmark.sh
 
+# Sync shared template to Go (go:embed can't follow symlinks)
+sync-templates:
+	cp shared/template.html ports/go/template.html
+
 # Individual ports
 run-ts:
 	cd ports/typescript && npx ts-node src/cli.ts
