@@ -8,31 +8,27 @@ Combines AI-powered analysis (Claude Opus) with pattern-based heuristics to coac
 
 ## Quick Start
 
-The primary implementation is Python. TypeScript, Go, and Rust ports are also available.
-
 ```bash
 git clone https://github.com/brianleach/claude-analytics.git
-cd claude-analytics/ports/python
-pip install -e ".[ai]"
+cd claude-analytics
+make install
 ```
 
 Add your Anthropic API key for the best results (AI-powered recommendations via Claude Opus, ~$0.15-0.25 per run):
 
 ```bash
-# Option 1: export directly
 export ANTHROPIC_API_KEY=sk-ant-...
-
-# Option 2: create a .env file in ports/python/ (see .env.example)
-echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 ```
 
 Then run:
 
 ```bash
-claude-analytics
+make run
 ```
 
-The report generates from your local `~/.claude/` data and opens in your browser. If no API key is set, it still works — you'll get pattern-based recommendations instead of AI-powered ones.
+That's it. The report generates from your `~/.claude/` data and opens in your browser. If no API key is set, it still works — you'll get pattern-based recommendations instead of AI-powered ones.
+
+You can also run without the API: `make run-no-api`
 
 ## Ports
 
