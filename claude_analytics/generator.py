@@ -32,6 +32,14 @@ def generate_html(data, recommendations):
         "analysis": data["analysis"],
         "recommendations": recommendations,
         "work_days": data.get("work_days", []),
+        # New data
+        "models": data.get("models", []),
+        "subagents": data.get("subagents", {}),
+        "branches": data.get("branches", []),
+        "context_efficiency": data.get("context_efficiency", {}),
+        "versions": data.get("versions", []),
+        "skills": data.get("skills", []),
+        "config": data.get("config", {}),
     }
 
     # Inject data into template

@@ -9,6 +9,27 @@ from collections import defaultdict
 from pathlib import Path
 
 
+# === COST ESTIMATES (per million tokens, USD) ===
+MODEL_COSTS = {
+    "claude-opus-4": {"input": 15.0, "output": 75.0, "cache_read": 1.5, "cache_write": 18.75},
+    "claude-sonnet-4": {"input": 3.0, "output": 15.0, "cache_read": 0.30, "cache_write": 3.75},
+    "claude-haiku-4": {"input": 0.80, "output": 4.0, "cache_read": 0.08, "cache_write": 1.0},
+}
+
+
+def match_model_cost(model_str):
+    """Match a model string to its cost tier."""
+    m = (model_str or "").lower()
+    if "opus" in m:
+        return MODEL_COSTS["claude-opus-4"]
+    if "sonnet" in m:
+        return MODEL_COSTS["claude-sonnet-4"]
+    if "haiku" in m:
+        return MODEL_COSTS["claude-haiku-4"]
+    # Default to sonnet pricing for unknown
+    return MODEL_COSTS["claude-sonnet-4"]
+
+
 def detect_timezone_offset():
     """Detect the local timezone offset from UTC in hours."""
     now = datetime.now()
@@ -40,18 +61,40 @@ def find_session_files(claude_dir):
     return main_sessions
 
 
+def find_subagent_files(claude_dir):
+    """Find all subagent JSONL and meta files."""
+    projects_dir = claude_dir / "projects"
+    if not projects_dir.exists():
+        return [], []
+    jsonl_files = list(projects_dir.glob("*/*/subagents/*.jsonl"))
+    meta_files = list(projects_dir.glob("*/*/subagents/*.meta.json"))
+    return jsonl_files, meta_files
+
+
 def clean_project_name(dirname):
     """Convert directory name to readable project name."""
     name = dirname
-    # Remove common prefixes
     home = str(Path.home()).replace("/", "-").replace("\\", "-")
     if home.startswith("-"):
         home = home[1:]
     name = name.replace(home + "-", "").replace(home, "home")
-    # Clean up remaining dashes
     if name.startswith("-"):
         name = name[1:]
     return name or "unknown"
+
+
+def normalize_model_name(model_str):
+    """Normalize model string to a clean display name."""
+    if not model_str:
+        return "unknown"
+    m = model_str.lower()
+    if "opus" in m:
+        return "Opus"
+    if "sonnet" in m:
+        return "Sonnet"
+    if "haiku" in m:
+        return "Haiku"
+    return model_str
 
 
 def categorize_prompt(text):
@@ -149,16 +192,181 @@ def length_bucket(length):
     return "comprehensive (500+)"
 
 
+def parse_config(claude_dir):
+    """Parse .claude.json for feature flags, plugins, and settings."""
+    config_path = claude_dir / ".claude.json"
+    config = {
+        "has_config": False,
+        "plugins": [],
+        "feature_flags": [],
+        "version_info": {},
+    }
+
+    if not config_path.exists():
+        return config
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            data = json.load(f)
+        config["has_config"] = True
+
+        # Extract plugins from feature flags
+        features = data.get("cachedGrowthBookFeatures", {})
+        amber_lattice = features.get("tengu_amber_lattice", {})
+        if isinstance(amber_lattice, dict):
+            plugins = amber_lattice.get("value", [])
+            if isinstance(plugins, list):
+                config["plugins"] = [p for p in plugins if isinstance(p, str)]
+
+        # Extract interesting feature flags
+        flag_names = []
+        for key, val in features.items():
+            if isinstance(val, dict):
+                flag_names.append({
+                    "name": key.replace("tengu_", ""),
+                    "enabled": bool(val.get("value")),
+                })
+            elif isinstance(val, bool):
+                flag_names.append({"name": key.replace("tengu_", ""), "enabled": val})
+        config["feature_flags"] = flag_names
+
+        # Migration / account info
+        config["version_info"] = {
+            "migration_version": data.get("migrationVersion", ""),
+            "first_start": data.get("firstStartTime", ""),
+        }
+
+    except Exception:
+        pass
+
+    return config
+
+
+def parse_subagents(claude_dir, tz_offset):
+    """Parse all subagent data."""
+    jsonl_files, meta_files = find_subagent_files(claude_dir)
+
+    # Build meta lookup
+    meta_lookup = {}
+    for mf in meta_files:
+        try:
+            with open(mf, "r", encoding="utf-8") as f:
+                meta = json.load(f)
+            agent_id = mf.stem.replace("agent-", "").replace(".meta", "")
+            meta_lookup[agent_id] = {
+                "type": meta.get("agentType", "unknown"),
+                "description": meta.get("description", ""),
+            }
+        except Exception:
+            continue
+
+    # Parse subagent JSONL files
+    subagents = []
+    type_counts = defaultdict(int)
+    model_tokens = defaultdict(lambda: {"input": 0, "output": 0, "cache_read": 0})
+
+    for filepath in jsonl_files:
+        agent_id = filepath.stem.replace("agent-", "")
+        is_compaction = "compact" in agent_id.lower()
+        meta = meta_lookup.get(agent_id, {"type": "unknown", "description": ""})
+        agent_type = meta["type"]
+        type_counts[agent_type] += 1
+
+        msg_count = 0
+        tool_calls = 0
+        input_tokens = 0
+        output_tokens = 0
+        cache_read = 0
+        models_used = set()
+        first_ts = None
+        last_ts = None
+
+        try:
+            with open(filepath, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except json.JSONDecodeError:
+                        continue
+
+                    ts = d.get("timestamp")
+                    if ts:
+                        if not first_ts or ts < first_ts:
+                            first_ts = ts
+                        if not last_ts or ts > last_ts:
+                            last_ts = ts
+
+                    msg = d.get("message", {})
+                    if isinstance(msg, dict):
+                        m = msg.get("model", "")
+                        if m:
+                            models_used.add(m)
+                        usage = msg.get("usage", {})
+                        if usage:
+                            input_tokens += usage.get("input_tokens", 0)
+                            output_tokens += usage.get("output_tokens", 0)
+                            cache_read += usage.get("cache_read_input_tokens", 0)
+                        content = msg.get("content", [])
+                        if isinstance(content, list):
+                            for c in content:
+                                if isinstance(c, dict) and c.get("type") == "tool_use":
+                                    tool_calls += 1
+
+                    msg_count += 1
+
+        except Exception:
+            continue
+
+        # Get parent project
+        parent_session_dir = filepath.parent.parent.parent.name
+        proj_name = clean_project_name(parent_session_dir)
+
+        duration = 0
+        if first_ts and last_ts:
+            try:
+                t1 = datetime.fromisoformat(first_ts.replace("Z", "+00:00"))
+                t2 = datetime.fromisoformat(last_ts.replace("Z", "+00:00"))
+                duration = (t2 - t1).total_seconds() / 60
+            except Exception:
+                pass
+
+        subagents.append({
+            "agent_id": agent_id[:12],
+            "type": agent_type,
+            "description": meta["description"][:80],
+            "is_compaction": is_compaction,
+            "project": proj_name,
+            "messages": msg_count,
+            "tool_calls": tool_calls,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "cache_read_tokens": cache_read,
+            "models": list(models_used),
+            "duration_min": round(duration, 1),
+        })
+
+        # Accumulate tokens by model for subagents
+        for m in models_used:
+            model_tokens[m]["input"] += input_tokens // max(len(models_used), 1)
+            model_tokens[m]["output"] += output_tokens // max(len(models_used), 1)
+            model_tokens[m]["cache_read"] += cache_read // max(len(models_used), 1)
+
+    return {
+        "subagents": subagents,
+        "type_counts": dict(type_counts),
+        "total_count": len(subagents),
+        "compaction_count": sum(1 for s in subagents if s["is_compaction"]),
+        "total_subagent_input_tokens": sum(s["input_tokens"] for s in subagents),
+        "total_subagent_output_tokens": sum(s["output_tokens"] for s in subagents),
+        "model_tokens": dict(model_tokens),
+    }
+
+
 def parse_all_sessions(claude_dir, tz_offset=None):
-    """Parse all session data and return structured analytics.
-
-    Args:
-        claude_dir: Path to ~/.claude directory
-        tz_offset: Timezone offset from UTC in hours (auto-detected if None)
-
-    Returns:
-        dict with all parsed and analyzed data
-    """
+    """Parse all session data and return structured analytics."""
     if tz_offset is None:
         tz_offset = detect_timezone_offset()
 
@@ -175,6 +383,15 @@ def parse_all_sessions(claude_dir, tz_offset=None):
     prompts = []
     drilldown = defaultdict(lambda: defaultdict(list))
 
+    # New: track models, branches, versions, thinking blocks, cost
+    model_counts = defaultdict(lambda: {"msgs": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0})
+    branch_activity = defaultdict(lambda: {"msgs": 0, "sessions": set(), "projects": set()})
+    version_counts = defaultdict(int)
+    thinking_count = 0
+    total_tool_result_tokens = 0
+    total_conversation_tokens = 0
+    skill_usage = defaultdict(int)
+
     for filepath in session_files:
         project_dir = filepath.parent.name
         proj_name = clean_project_name(project_dir)
@@ -186,6 +403,11 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         tool_uses = 0
         model = None
         entrypoint = None
+        git_branch = None
+        session_input_tokens = 0
+        session_output_tokens = 0
+        session_cache_read = 0
+        session_cache_write = 0
 
         try:
             with open(filepath, "r", encoding="utf-8") as f:
@@ -200,6 +422,14 @@ def parse_all_sessions(claude_dir, tz_offset=None):
 
                     msg_type = d.get("type")
                     ts = d.get("timestamp")
+
+                    # Track version and branch
+                    ver = d.get("version")
+                    if ver:
+                        version_counts[ver] += 1
+                    br = d.get("gitBranch")
+                    if br and br != "HEAD":
+                        git_branch = br
 
                     if msg_type == "user" and ts:
                         user_msgs += 1
@@ -271,6 +501,12 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                                 "length": prompt["full_length"],
                             })
 
+                        # Track branch activity
+                        if git_branch:
+                            branch_activity[git_branch]["msgs"] += 1
+                            branch_activity[git_branch]["sessions"].add(session_id[:8])
+                            branch_activity[git_branch]["projects"].add(proj_name)
+
                     elif msg_type == "assistant" and ts:
                         assistant_msgs += 1
                         timestamps.append(ts)
@@ -284,6 +520,8 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                         msg_tools = []
                         input_tokens = 0
                         output_tokens = 0
+                        cache_read_tokens = 0
+                        cache_write_tokens = 0
 
                         if isinstance(msg, dict):
                             msg_model = msg.get("model", "")
@@ -291,17 +529,47 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                                 model = msg_model
                             content = msg.get("content", [])
                             if isinstance(content, list):
-                                msg_tools = [
-                                    c.get("name", "")
-                                    for c in content
-                                    if isinstance(c, dict)
-                                    and c.get("type") == "tool_use"
-                                ]
+                                for c in content:
+                                    if isinstance(c, dict):
+                                        if c.get("type") == "tool_use":
+                                            msg_tools.append(c.get("name", ""))
+                                            # Track skill usage (MCP tools)
+                                            tool_name = c.get("name", "")
+                                            if tool_name.startswith("mcp__"):
+                                                skill_usage[tool_name.split("__")[1]] += 1
+                                        elif c.get("type") == "thinking":
+                                            thinking_count += 1
                                 tool_uses += len(msg_tools)
                             usage = msg.get("usage", {})
                             if usage:
                                 input_tokens = usage.get("input_tokens", 0)
                                 output_tokens = usage.get("output_tokens", 0)
+                                cache_read_tokens = usage.get("cache_read_input_tokens", 0)
+                                cache_write_tokens = usage.get("cache_creation_input_tokens", 0)
+
+                        # Accumulate session tokens
+                        session_input_tokens += input_tokens
+                        session_output_tokens += output_tokens
+                        session_cache_read += cache_read_tokens
+                        session_cache_write += cache_write_tokens
+
+                        # Track per-model token usage
+                        norm_model = msg_model or model or "unknown"
+                        model_counts[norm_model]["msgs"] += 1
+                        model_counts[norm_model]["input"] += input_tokens
+                        model_counts[norm_model]["output"] += output_tokens
+                        model_counts[norm_model]["cache_read"] += cache_read_tokens
+                        model_counts[norm_model]["cache_write"] += cache_write_tokens
+
+                        # Track tool result vs conversation tokens
+                        if msg_tools:
+                            total_tool_result_tokens += output_tokens
+                        else:
+                            total_conversation_tokens += output_tokens
+
+                        # Track branch activity for assistant msgs too
+                        if git_branch:
+                            branch_activity[git_branch]["msgs"] += 1
 
                         all_messages.append({
                             "timestamp": ts,
@@ -332,6 +600,11 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                 "model": model,
                 "entrypoint": entrypoint,
                 "msg_count": user_msgs + assistant_msgs,
+                "git_branch": git_branch,
+                "input_tokens": session_input_tokens,
+                "output_tokens": session_output_tokens,
+                "cache_read_tokens": session_cache_read,
+                "cache_write_tokens": session_cache_write,
             })
 
     # === Pass 2: Aggregate ===
@@ -371,8 +644,7 @@ def parse_all_sessions(claude_dir, tz_offset=None):
     for wd in range(7):
         for hr in range(24):
             heatmap_data.append({
-                "weekday": wd,
-                "hour": hr,
+                "weekday": wd, "hour": hr,
                 "count": heatmap_counts.get(f"{wd}_{hr}", 0),
             })
 
@@ -445,6 +717,7 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                 "msgs_per_min": round(
                     s["msg_count"] / max(dur, 1), 2
                 ),
+                "git_branch": s.get("git_branch", ""),
             })
         except Exception:
             continue
@@ -496,8 +769,7 @@ def parse_all_sessions(claude_dir, tz_offset=None):
     for day, times in sorted(daily_spans.items()):
         times.sort()
         span_hrs = (times[-1] - times[0]).total_seconds() / 3600
-        # Active hours: count time between messages with < 30 min gap
-        active_secs = 120  # first message
+        active_secs = 120
         for i in range(1, len(times)):
             gap = (times[i] - times[i - 1]).total_seconds()
             active_secs += min(gap, 1800)
@@ -566,13 +838,91 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         ),
     }
 
-    # Model stats
-    model_counts = defaultdict(int)
-    for m in asst_messages:
-        model_counts[m.get("model", "unknown")] += 1
+    # === NEW: Model breakdown ===
+    total_output = sum(v["output"] for v in model_counts.values())
+    total_input = sum(v["input"] for v in model_counts.values())
+    total_cache_read = sum(v["cache_read"] for v in model_counts.values())
+    total_cache_write = sum(v["cache_write"] for v in model_counts.values())
 
-    total_output = sum(m.get("output_tokens", 0) for m in asst_messages)
-    total_input = sum(m.get("input_tokens", 0) for m in asst_messages)
+    model_breakdown = []
+    for raw_model, counts in sorted(model_counts.items(), key=lambda x: -x[1]["msgs"]):
+        display = normalize_model_name(raw_model)
+        cost_tier = match_model_cost(raw_model)
+        cost = (
+            counts["input"] / 1_000_000 * cost_tier["input"]
+            + counts["output"] / 1_000_000 * cost_tier["output"]
+            + counts["cache_read"] / 1_000_000 * cost_tier["cache_read"]
+            + counts["cache_write"] / 1_000_000 * cost_tier["cache_write"]
+        )
+        model_breakdown.append({
+            "model": raw_model,
+            "display": display,
+            "msgs": counts["msgs"],
+            "input_tokens": counts["input"],
+            "output_tokens": counts["output"],
+            "cache_read_tokens": counts["cache_read"],
+            "cache_write_tokens": counts["cache_write"],
+            "estimated_cost": round(cost, 2),
+        })
+
+    # === NEW: Cost estimation ===
+    total_cost = sum(m["estimated_cost"] for m in model_breakdown)
+
+    # === NEW: Subagent analysis ===
+    subagent_data = parse_subagents(claude_dir, tz_offset)
+
+    # Add subagent costs
+    subagent_cost = 0
+    for raw_model, tokens in subagent_data["model_tokens"].items():
+        cost_tier = match_model_cost(raw_model)
+        subagent_cost += (
+            tokens["input"] / 1_000_000 * cost_tier["input"]
+            + tokens["output"] / 1_000_000 * cost_tier["output"]
+            + tokens["cache_read"] / 1_000_000 * cost_tier["cache_read"]
+        )
+    subagent_data["estimated_cost"] = round(subagent_cost, 2)
+    total_cost += subagent_cost
+
+    # === NEW: Git branch data ===
+    branch_data = sorted(
+        [
+            {
+                "branch": br,
+                "msgs": d["msgs"],
+                "sessions": len(d["sessions"]),
+                "projects": list(d["projects"]),
+            }
+            for br, d in branch_activity.items()
+        ],
+        key=lambda x: -x["msgs"],
+    )[:20]
+
+    # === NEW: Context efficiency ===
+    total_all_output = total_output + subagent_data["total_subagent_output_tokens"]
+    context_efficiency = {
+        "tool_output_tokens": total_tool_result_tokens,
+        "conversation_tokens": total_conversation_tokens,
+        "tool_pct": round(total_tool_result_tokens / max(total_output, 1) * 100, 1),
+        "conversation_pct": round(total_conversation_tokens / max(total_output, 1) * 100, 1),
+        "thinking_blocks": thinking_count,
+        "subagent_output_tokens": subagent_data["total_subagent_output_tokens"],
+        "subagent_pct": round(subagent_data["total_subagent_output_tokens"] / max(total_all_output, 1) * 100, 1),
+    }
+
+    # === NEW: Version tracking ===
+    version_data = [
+        {"version": v, "count": c}
+        for v, c in sorted(version_counts.items(), key=lambda x: -x[1])[:10]
+    ]
+
+    # === NEW: Skill/MCP usage ===
+    skill_data = [
+        {"skill": s, "count": c}
+        for s, c in sorted(skill_usage.items(), key=lambda x: -x[1])[:15]
+    ]
+
+    # Config
+    config = parse_config(claude_dir)
 
     summary = {
         "total_sessions": len(sessions_meta),
@@ -583,6 +933,8 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         ),
         "total_output_tokens": total_output,
         "total_input_tokens": total_input,
+        "total_cache_read_tokens": total_cache_read,
+        "total_cache_write_tokens": total_cache_write,
         "date_range_start": all_dates[0] if all_dates else "",
         "date_range_end": all_dates[-1] if all_dates else "",
         "unique_projects": len(project_stats),
@@ -594,6 +946,7 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         ),
         "tz_offset": tz_offset,
         "tz_label": f"UTC{tz_offset:+d}",
+        "estimated_cost": round(total_cost, 2),
     }
 
     return {
@@ -612,4 +965,12 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         "analysis": analysis,
         "prompts": prompts,
         "work_days": work_days,
+        # NEW data
+        "models": model_breakdown,
+        "subagents": subagent_data,
+        "branches": branch_data,
+        "context_efficiency": context_efficiency,
+        "versions": version_data,
+        "skills": skill_data,
+        "config": config,
     }
