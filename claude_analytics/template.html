@@ -154,9 +154,9 @@
         <div class="stats-strip">
             <div class="stat-item"><div class="stat-label">Sessions</div><div class="stat-value" id="statSessions">0</div></div>
             <div class="stat-item"><div class="stat-label">Prompts</div><div class="stat-value" id="statPrompts">0</div></div>
+            <div class="stat-item"><div class="stat-label">Input Tokens</div><div class="stat-value" id="statInputTokens">0</div></div>
+            <div class="stat-item"><div class="stat-label">Output Tokens</div><div class="stat-value" id="statOutputTokens">0</div></div>
             <div class="stat-item"><div class="stat-label">Tool Calls</div><div class="stat-value" id="statTools">0</div></div>
-            <div class="stat-item"><div class="stat-label">Subagents</div><div class="stat-value" id="statSubagents">0</div></div>
-            <div class="stat-item"><div class="stat-label">Projects</div><div class="stat-value" id="statProjects">0</div></div>
             <div class="stat-item"><div class="stat-label">Est. API Cost *</div><div class="stat-value cost" id="statCost">$0</div></div>
         </div>
         <div style="background:rgba(255,170,51,0.06);border:1px solid rgba(255,170,51,0.2);border-radius:2px;padding:10px 16px;margin-bottom:30px;font-size:11px;color:var(--text-muted);line-height:1.5">
@@ -223,10 +223,6 @@
                 </div>
                 <div class="info-grid" id="costGrid"></div>
                 <div id="costTips" class="info-grid" style="margin-top:20px"></div>
-                <div class="full-width-chart" style="margin-top:20px">
-                    <h3>Cost by Model</h3>
-                    <div class="chart-wrapper" style="height:250px"><canvas id="chartCostModel"></canvas></div>
-                </div>
             </div>
 
             <div class="section">
@@ -234,6 +230,10 @@
                 <div class="charts-grid">
                     <div class="chart-container"><h3>Messages by Model</h3><div class="chart-wrapper"><canvas id="chartModelMsgs"></canvas></div><div class="chart-note">Click a slice for model details</div></div>
                     <div class="chart-container"><h3>Tokens by Model</h3><div class="chart-wrapper"><canvas id="chartModelTokens"></canvas></div></div>
+                </div>
+                <div class="full-width-chart" style="margin-top:20px">
+                    <h3>Cost by Model</h3>
+                    <div class="chart-wrapper" style="height:250px"><canvas id="chartCostModel"></canvas></div>
                 </div>
             </div>
 
@@ -252,8 +252,17 @@
                 <div id="branchTable"></div>
             </div>
 
+            <div class="section" id="slashCommandSection" style="display:none">
+                <div class="section-header">$ Skills (Slash Commands)</div>
+                <div style="color:var(--text-muted);font-size:12px;margin-bottom:15px;">Skills invoked via the Skill tool (note: some slash commands like /clear, /model are handled client-side and not tracked in session data)</div>
+                <div class="full-width-chart">
+                    <div class="chart-wrapper" style="height:280px"><canvas id="chartSlashCommands"></canvas></div>
+                </div>
+                <div class="info-grid" id="slashCommandGrid" style="margin-top:20px"></div>
+            </div>
+
             <div class="section">
-                <div class="section-header">$ Skills & MCP Integrations</div>
+                <div class="section-header">$ MCP Integrations</div>
                 <div class="charts-grid">
                     <div class="chart-container"><h3>MCP Tool Usage</h3><div class="chart-wrapper"><canvas id="chartSkills"></canvas></div></div>
                     <div class="chart-container"><h3>Claude Code Versions</h3><div class="chart-wrapper"><canvas id="chartVersions"></canvas></div></div>
@@ -347,12 +356,13 @@
         // === INIT ===
         function init(){
             const s=D.dashboard.summary, a=D.analysis;
-            document.getElementById('dateRange').textContent=s.date_range_start+' · '+s.date_range_end+' · '+s.tz_label;
+            const rangePrefix=s.since_date?'Since '+s.since_date+' · ':'';
+            document.getElementById('dateRange').textContent=rangePrefix+s.date_range_start+' → '+s.date_range_end+' · '+s.tz_label;
             document.getElementById('statSessions').textContent=D.dashboard.sessions.length;
             document.getElementById('statPrompts').textContent=a.total_prompts;
+            document.getElementById('statInputTokens').textContent=fk(s.total_input_tokens+s.total_cache_read_tokens);
+            document.getElementById('statOutputTokens').textContent=fk(s.total_output_tokens);
             document.getElementById('statTools').textContent=fk(s.total_tool_calls);
-            document.getElementById('statSubagents').textContent=(D.subagents||{}).total_count||0;
-            document.getElementById('statProjects').textContent=s.unique_projects;
             document.getElementById('statCost').textContent=fc(s.estimated_cost||0);
             renderRecommendations();
             renderDailyChart();
@@ -378,7 +388,8 @@
         function renderHeatmap(){
             const g=document.getElementById('heatmapGrid'),l=document.getElementById('heatmapLabels');g.innerHTML='';l.innerHTML='';
             let mx=0;D.dashboard.heatmap.forEach(h=>{if(h.count>mx)mx=h.count});if(!mx)mx=1;
-            D.dashboard.heatmap.forEach(h=>{const c=document.createElement('div');c.className='heatmap-cell heat-'+Math.min(4,Math.floor(h.count/mx*5));c.textContent=h.count>0?h.count:'';c.onclick=()=>showHeatmapDrawer(h.weekday,h.hour);c.onmouseenter=e=>showTooltip(h.weekday+', '+h.hour+':00 — '+h.count+' msgs',e.clientX,e.clientY);c.onmouseleave=()=>hideTooltip();g.appendChild(c)});
+            const dayNames=['Mon','Tue','Wed','Thu','Fri','Sat','Sun'];
+            D.dashboard.heatmap.forEach(h=>{const c=document.createElement('div');c.className='heatmap-cell heat-'+Math.min(4,Math.floor(h.count/mx*5));c.textContent=h.count>0?h.count:'';c.onclick=()=>showHeatmapDrawer(h.weekday,h.hour);c.onmouseenter=e=>showTooltip(dayNames[h.weekday]+', '+h.hour+':00 — '+h.count+' msgs',e.clientX,e.clientY);c.onmouseleave=()=>hideTooltip();g.appendChild(c)});
             for(let h=0;h<24;h++){const d=document.createElement('div');d.textContent=h;l.appendChild(d)}
         }
 
@@ -411,10 +422,11 @@
                     <div class="info-row" style="border-top:2px solid var(--border-color);margin-top:4px;padding-top:8px"><span class="label" style="font-weight:700">Total</span><span class="value amber" style="font-size:16px">${fc(s.estimated_cost||0)}</span></div>
                 </div>
                 <div class="info-card"><h4>Cost Drivers</h4>
-                    <div class="info-row"><span class="label">Cache read cost</span><span class="value">${fc(totalCR/1e6*(models[0]?({'Opus':1.5,'Sonnet':0.3,'Haiku':0.08}[models[0].display]||1.5):1.5))}</span></div>
-                    <div class="info-row"><span class="label">Cache write cost</span><span class="value">${fc(totalCW/1e6*(models[0]?({'Opus':18.75,'Sonnet':3.75,'Haiku':1.0}[models[0].display]||18.75):18.75))}</span></div>
-                    <div class="info-row"><span class="label">Output cost</span><span class="value">${fc(totalOut/1e6*(models[0]?({'Opus':75,'Sonnet':15,'Haiku':4}[models[0].display]||75):75))}</span></div>
-                    <div class="info-row"><span class="label">Input cost</span><span class="value">${fc(totalIn/1e6*(models[0]?({'Opus':15,'Sonnet':3,'Haiku':0.8}[models[0].display]||15):15))}</span></div>
+                    ${(()=>{const rates={'Opus':{i:15,o:75,cr:1.5,cw:18.75},'Sonnet':{i:3,o:15,cr:0.3,cw:3.75},'Haiku':{i:0.8,o:4,cr:0.08,cw:1.0}};let ci=0,co=0,ccr=0,ccw=0;models.forEach(m=>{const r=rates[m.display]||rates['Sonnet'];ci+=m.input_tokens/1e6*r.i;co+=m.output_tokens/1e6*r.o;ccr+=m.cache_read_tokens/1e6*r.cr;ccw+=m.cache_write_tokens/1e6*r.cw});return`
+                    <div class="info-row"><span class="label">Output cost</span><span class="value">${fc(co)}</span></div>
+                    <div class="info-row"><span class="label">Cache write cost</span><span class="value">${fc(ccw)}</span></div>
+                    <div class="info-row"><span class="label">Cache read cost</span><span class="value">${fc(ccr)}</span></div>
+                    <div class="info-row"><span class="label">Input cost</span><span class="value">${fc(ci)}</span></div>`})()}
                 </div>`;
 
             // Cost tips
@@ -442,11 +454,6 @@
             const tg=document.getElementById('costTips');
             tg.innerHTML=tips.map(t=>`<div class="info-card" style="border-color:${t.severity==='high'?'var(--accent-red)':t.severity==='medium'?'var(--accent-amber)':'var(--border-color)'}"><h4 style="color:${t.severity==='high'?'var(--accent-red)':'var(--accent-amber)'}">Tip: ${esc(t.title)}</h4><div style="color:var(--text-secondary);font-size:12px;line-height:1.6;margin-top:8px">${esc(t.body)}</div></div>`).join('');
 
-            // Cost by model chart
-            const costModels=models.filter(m=>m.estimated_cost>0);
-            if(costModels.length){
-                new Chart(document.getElementById('chartCostModel').getContext('2d'),{type:'bar',data:{labels:costModels.map(m=>m.display),datasets:[{label:'Cost ($)',data:costModels.map(m=>m.estimated_cost),backgroundColor:PAL.slice(0,costModels.length),borderColor:'#1e1e1e',borderWidth:1}]},options:chartOpts()})
-            }
         }
 
         function renderModelSection(){
@@ -456,6 +463,11 @@
             new Chart(document.getElementById('chartModelMsgs').getContext('2d'),{type:'doughnut',data:{labels:models.map(m=>m.display),datasets:[{data:models.map(m=>m.msgs),backgroundColor:PAL.slice(0,models.length),borderColor:'#1e1e1e',borderWidth:1}]},options:{plugins:{legend:legendOpts},onClick:(e,els)=>{if(els.length>0){const model=models[els[0].index];showModelSessionsDrawer(model)}}}});
             // Tokens by model
             new Chart(document.getElementById('chartModelTokens').getContext('2d'),{type:'bar',data:{labels:models.map(m=>m.display),datasets:[{label:'Input',data:models.map(m=>m.input_tokens),backgroundColor:'#33ff88'},{label:'Output',data:models.map(m=>m.output_tokens),backgroundColor:'#44ddff'},{label:'Cache Read',data:models.map(m=>m.cache_read_tokens),backgroundColor:'#ffaa33'}]},options:{plugins:{legend:legendOpts},scales:{x:{ticks:{color:'#888'},grid:{color:'#1e1e1e'}},y:{ticks:{color:'#888',callback:v=>fk(v)},grid:{color:'#1e1e1e'}}}}});
+            // Cost by model
+            const costModels=models.filter(m=>m.estimated_cost>0);
+            if(costModels.length){
+                new Chart(document.getElementById('chartCostModel').getContext('2d'),{type:'bar',data:{labels:costModels.map(m=>m.display),datasets:[{label:'Cost ($)',data:costModels.map(m=>m.estimated_cost),backgroundColor:PAL.slice(0,costModels.length),borderColor:'#1e1e1e',borderWidth:1}]},options:chartOpts()})
+            }
         }
 
         function showModelSessionsDrawer(model){
@@ -559,7 +571,23 @@
         }
 
         function renderSkillSection(){
-            const skills=D.skills||[];const versions=D.versions||[];
+            const skills=D.skills||[];const versions=D.versions||[];const cmds=D.slash_commands||[];
+            // Slash commands section
+            if(cmds.length){
+                document.getElementById('slashCommandSection').style.display='block';
+                const totalCmds=cmds.reduce((a,c)=>a+c.count,0);
+                new Chart(document.getElementById('chartSlashCommands').getContext('2d'),{type:'bar',data:{labels:cmds.map(c=>'/'+c.command),datasets:[{label:'Invocations',data:cmds.map(c=>c.count),backgroundColor:PAL.slice(0,cmds.length),borderColor:'#1e1e1e',borderWidth:1}]},options:{indexAxis:'y',...chartOpts()}});
+                const grid=document.getElementById('slashCommandGrid');
+                grid.innerHTML=`<div class="info-card"><h4>Skill Summary</h4>
+                    <div class="info-row"><span class="label">Total invocations</span><span class="value green">${totalCmds.toLocaleString()}</span></div>
+                    <div class="info-row"><span class="label">Unique skills</span><span class="value">${cmds.length}</span></div>
+                    <div class="info-row"><span class="label">Most used</span><span class="value green">/${esc(cmds[0].command)} (${cmds[0].count}x)</span></div>
+                </div>
+                <div class="info-card"><h4>All Skills</h4>
+                    ${cmds.map(c=>`<div class="info-row"><span class="label">/${esc(c.command)}</span><span class="value">${c.count} calls</span></div>`).join('')}
+                </div>`;
+            }
+            // MCP tools
             if(skills.length){
                 new Chart(document.getElementById('chartSkills').getContext('2d'),{type:'bar',data:{labels:skills.map(s=>s.skill),datasets:[{label:'Calls',data:skills.map(s=>s.count),backgroundColor:PAL.slice(0,skills.length),borderColor:'#1e1e1e',borderWidth:1}]},options:{indexAxis:'y',...chartOpts()}})
             }

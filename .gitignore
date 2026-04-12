@@ -12,3 +12,6 @@ env/
 venv/
 claude-analytics-report.html
 .DS_Store
+
+# Claude Analytics reports (contain sensitive data)
+output/

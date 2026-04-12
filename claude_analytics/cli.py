@@ -8,10 +8,23 @@ import sys
 import webbrowser
 from pathlib import Path
 
+# Load .env if present (for ANTHROPIC_API_KEY)
+_env_path = Path.cwd() / ".env"
+if _env_path.exists():
+    with open(_env_path) as _f:
+        for _line in _f:
+            _line = _line.strip()
+            if _line and not _line.startswith("#") and "=" in _line:
+                _key, _, _val = _line.partition("=")
+                _key = _key.strip()
+                _val = _val.strip().strip("'\"")
+                if _key and _key not in os.environ:
+                    os.environ[_key] = _val
+
 from . import __version__
 from .parser import find_claude_dir, parse_all_sessions
 from .analyzer import generate_recommendations
-from .generator import generate_html, write_report
+from .generator import generate_html, write_report, read_last_run, save_last_run
 
 
 BANNER = r"""
@@ -64,7 +77,7 @@ def main():
         "-o", "--output",
         type=str,
         default=None,
-        help="Output path for the HTML report (default: ./claude-analytics-report.html)",
+        help="Output path for the HTML report (default: ./output/claude-analytics-TIMESTAMP.html)",
     )
     parser.add_argument(
         "--claude-dir",
@@ -77,6 +90,12 @@ def main():
         type=int,
         default=None,
         help="Timezone offset from UTC in hours (auto-detected if not set)",
+    )
+    parser.add_argument(
+        "--since",
+        type=str,
+        default=None,
+        help="Only include data since this date (YYYY-MM-DD) or 'last' for since last run",
     )
 
     args = parser.parse_args()
@@ -100,14 +119,30 @@ def main():
         print(f"  Error: {e}")
         sys.exit(1)
 
+    # Resolve --since flag
+    since_date = None
+    if args.since:
+        if args.since.lower() == "last":
+            since_date = read_last_run()
+            if since_date:
+                print(f"  Filtering to data since last run: {since_date}")
+            else:
+                print("  No previous run found, showing all data")
+        else:
+            since_date = args.since
+            print(f"  Filtering to data since: {since_date}")
+
     # Step 2: Parse sessions
     print("[2/4] Parsing sessions...")
     try:
-        data = parse_all_sessions(claude_dir, tz_offset=args.tz_offset)
+        data = parse_all_sessions(claude_dir, tz_offset=args.tz_offset, since_date=since_date)
         summary = data["dashboard"]["summary"]
         print(f"  {summary['total_sessions']} sessions across {summary['unique_projects']} projects")
         print(f"  {summary['total_user_msgs']:,} messages, {data['analysis']['total_prompts']:,} prompts")
-        print(f"  {summary['date_range_start']} → {summary['date_range_end']}")
+        if since_date:
+            print(f"  Showing: {since_date} → {summary['date_range_end']}")
+        else:
+            print(f"  {summary['date_range_start']} → {summary['date_range_end']}")
         print(f"  Timezone: {summary['tz_label']}")
     except (FileNotFoundError, ValueError) as e:
         print(f"  Error: {e}")
@@ -132,6 +167,9 @@ def main():
 
     file_size_kb = output_path.stat().st_size / 1024
     print(f"  Size: {file_size_kb:.0f} KB")
+
+    # Save the last-run marker for --since last
+    save_last_run()
     print()
 
     # Open in browser

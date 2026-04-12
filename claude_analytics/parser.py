@@ -365,8 +365,15 @@ def parse_subagents(claude_dir, tz_offset):
     }
 
 
-def parse_all_sessions(claude_dir, tz_offset=None):
-    """Parse all session data and return structured analytics."""
+def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
+    """Parse all session data and return structured analytics.
+
+    Args:
+        claude_dir: Path to the .claude directory.
+        tz_offset: Timezone offset in hours from UTC.
+        since_date: Optional ISO date string (YYYY-MM-DD). If provided, only
+                    messages on or after this date are included.
+    """
     if tz_offset is None:
         tz_offset = detect_timezone_offset()
 
@@ -391,6 +398,7 @@ def parse_all_sessions(claude_dir, tz_offset=None):
     total_tool_result_tokens = 0
     total_conversation_tokens = 0
     skill_usage = defaultdict(int)
+    slash_commands = defaultdict(int)
 
     for filepath in session_files:
         project_dir = filepath.parent.name
@@ -432,13 +440,17 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                         git_branch = br
 
                     if msg_type == "user" and ts:
-                        user_msgs += 1
-                        if not entrypoint:
-                            entrypoint = d.get("entrypoint")
-
                         dt = datetime.fromisoformat(
                             ts.replace("Z", "+00:00")
                         ) + timedelta(hours=tz_offset)
+
+                        # Skip messages before the since_date cutoff
+                        if since_date and dt.strftime("%Y-%m-%d") < since_date:
+                            continue
+
+                        user_msgs += 1
+                        if not entrypoint:
+                            entrypoint = d.get("entrypoint")
 
                         msg_data = {
                             "timestamp": ts,
@@ -508,12 +520,16 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                             branch_activity[git_branch]["projects"].add(proj_name)
 
                     elif msg_type == "assistant" and ts:
-                        assistant_msgs += 1
-                        timestamps.append(ts)
-
                         dt = datetime.fromisoformat(
                             ts.replace("Z", "+00:00")
                         ) + timedelta(hours=tz_offset)
+
+                        # Skip messages before the since_date cutoff
+                        if since_date and dt.strftime("%Y-%m-%d") < since_date:
+                            continue
+
+                        assistant_msgs += 1
+                        timestamps.append(ts)
 
                         msg = d.get("message", {})
                         msg_model = None
@@ -533,10 +549,15 @@ def parse_all_sessions(claude_dir, tz_offset=None):
                                     if isinstance(c, dict):
                                         if c.get("type") == "tool_use":
                                             msg_tools.append(c.get("name", ""))
-                                            # Track skill usage (MCP tools)
                                             tool_name = c.get("name", "")
+                                            # Track MCP tool usage
                                             if tool_name.startswith("mcp__"):
                                                 skill_usage[tool_name.split("__")[1]] += 1
+                                            # Track slash command / skill invocations
+                                            if tool_name == "Skill":
+                                                skill_name = c.get("input", {}).get("skill", "unknown")
+                                                if skill_name:
+                                                    slash_commands[skill_name] += 1
                                         elif c.get("type") == "thinking":
                                             thinking_count += 1
                                 tool_uses += len(msg_tools)
@@ -921,6 +942,12 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         for s, c in sorted(skill_usage.items(), key=lambda x: -x[1])[:15]
     ]
 
+    # === NEW: Slash command usage ===
+    slash_command_data = [
+        {"command": cmd, "count": c}
+        for cmd, c in sorted(slash_commands.items(), key=lambda x: -x[1])[:15]
+    ]
+
     # Config
     config = parse_config(claude_dir)
 
@@ -937,6 +964,7 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         "total_cache_write_tokens": total_cache_write,
         "date_range_start": all_dates[0] if all_dates else "",
         "date_range_end": all_dates[-1] if all_dates else "",
+        "since_date": since_date or "",
         "unique_projects": len(project_stats),
         "unique_tools": len(tool_counts),
         "avg_session_duration": round(
@@ -972,5 +1000,6 @@ def parse_all_sessions(claude_dir, tz_offset=None):
         "context_efficiency": context_efficiency,
         "versions": version_data,
         "skills": skill_data,
+        "slash_commands": slash_command_data,
         "config": config,
     }
