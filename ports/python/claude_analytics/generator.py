@@ -41,6 +41,7 @@ def generate_html(data, recommendations):
         "versions": data.get("versions", []),
         "skills": data.get("skills", []),
         "slash_commands": data.get("slash_commands", []),
+        "permission_modes": data.get("permission_modes", {}),
         "config": data.get("config", {}),
     }
 

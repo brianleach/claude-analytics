@@ -97,7 +97,7 @@ All under 1 second for ~300MB of session data across 360 JSONL files. The AI rec
 
 ### Dashboard
 
-- **Rank badge** -- scored across 20 criteria (Beginner, Intermediate, Advanced, Master, Grand Master)
+- **Yegge Level badge** -- your level on [Steve Yegge's 8 Levels of Developer-Agent Evolution](https://justin.abrah.ms/blog/2026-01-08-yegge-s-developer-agent-evolution-model.html) (L1 Near-Zero AI through L8 Custom Orchestrator), detected from your usage signals
 - **Daily activity chart** -- click bars to drill into sessions for that day
 - **Weekly rhythm heatmap** -- spot your peak hours and dead zones
 - **Work day cards** -- clickable cards showing active hours, span, and prompt count per day
