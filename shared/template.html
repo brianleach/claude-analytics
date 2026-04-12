@@ -382,7 +382,7 @@
 
         function renderRankBadge(){
             // Based on Steve Yegge's "8 Levels of Developer-Agent Evolution"
-            // as covered by Addy Osmani: addyosmani.com/blog/code-agent-orchestra/
+            // from "Welcome to Gas Town": steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04
             const s=D.dashboard.summary, sa=D.subagents||{}, pm=D.permission_modes||{};
             const totalPm=Object.values(pm).reduce((a,b)=>a+b,0)||1;
             const autoPct=(pm['auto']||0)/totalPm*100;
@@ -429,7 +429,7 @@
             badge.className='stat-item rank-'+rank.cls;
             badge.style.borderRight='none';
             badge.style.textAlign='center';
-            badge.innerHTML=`<div class="stat-label"><a href="https://addyosmani.com/blog/code-agent-orchestra/" target="_blank" style="color:var(--text-muted);text-decoration:none;border-bottom:1px dashed var(--text-muted)">Yegge Level</a></div><div class="rank-title" style="font-size:22px">${rank.name}</div><div class="rank-subtitle" style="font-size:10px;margin-top:2px">${esc(rank.title)}</div><div class="rank-score" title="${esc(reason)}">${esc(reason)}</div>`;
+            badge.innerHTML=`<div class="stat-label"><a href="https://steve-yegge.medium.com/welcome-to-gas-town-4f25ee16dd04" target="_blank" style="color:var(--text-muted);text-decoration:none;border-bottom:1px dashed var(--text-muted)">Yegge Level</a></div><div class="rank-title" style="font-size:22px">${rank.name}</div><div class="rank-subtitle" style="font-size:10px;margin-top:2px">${esc(rank.title)}</div><div class="rank-score" title="${esc(reason)}">${esc(reason)}</div>`;
         }
 
         function renderRecommendations(){
