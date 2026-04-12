@@ -105,7 +105,7 @@
         .full-width-chart .chart-wrapper { height:350px; }
 
         .heatmap-container { display:flex; gap:30px; }
-        .heatmap-labels-left { display:flex; flex-direction:column; justify-content:space-around; font-size:11px; color:var(--text-muted); width:50px; text-align:right; padding-right:10px; }
+        .heatmap-labels-left { display:grid; grid-template-rows:repeat(7,1fr); gap:4px; font-size:11px; color:var(--text-muted); width:50px; text-align:right; padding-right:10px; align-items:center; margin-bottom:15px; }
         .heatmap-wrapper { flex:1; }
         .heatmap-grid { display:grid; grid-template-columns:repeat(24,1fr); grid-template-rows:repeat(7,1fr); gap:4px; margin-bottom:15px; }
         .heatmap-cell { aspect-ratio:1; border:1px solid var(--border-color); display:flex; align-items:center; justify-content:center; font-size:9px; font-weight:600; cursor:pointer; transition:all 0.2s; border-radius:2px; background:var(--bg-elevated); }
