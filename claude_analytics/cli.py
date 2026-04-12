@@ -8,33 +8,30 @@ import sys
 import webbrowser
 from pathlib import Path
 
-# Load .env if present (for ANTHROPIC_API_KEY)
-_env_path = Path.cwd() / ".env"
-if _env_path.exists():
-    with open(_env_path) as _f:
-        for _line in _f:
-            _line = _line.strip()
-            if _line and not _line.startswith("#") and "=" in _line:
-                _key, _, _val = _line.partition("=")
-                _key = _key.strip()
-                _val = _val.strip().strip("'\"")
-                if _key and _key not in os.environ:
-                    os.environ[_key] = _val
-
 from . import __version__
 from .parser import find_claude_dir, parse_all_sessions
 from .analyzer import generate_recommendations
 from .generator import generate_html, write_report, read_last_run, save_last_run
 
 
-BANNER = r"""
-   _____ _                 _         _                _       _   _
-  / ____| |               | |       | |    /\        | |     | | (_)
- | |    | | __ _ _   _  __| | ___   | |   /  \   _ __| | __ _| |_ _  ___ ___
- | |    | |/ _` | | | |/ _` |/ _ \  | |  / /\ \ | '__| |/ _` | __| |/ __/ __|
- | |____| | (_| | |_| | (_| |  __/  | | / ____ \| |  | | (_| | |_| | (__\__ \
-  \_____|_|\__,_|\__,_|\__,_|\___|  |_|/_/    \_\_|  |_|\__,_|\__|_|\___|___/
-"""
+BANNER_LINES = [
+    "   ____ _                 _",
+    "  / ___| | __ _ _   _  __| | ___",
+    " | |   | |/ _` | | | |/ _` |/ _ \\",
+    " | |___| | (_| | |_| | (_| |  __/",
+    "  \\____|_|\\__,_|\\__,_|\\__,_|\\___|",
+    "     _                _       _   _",
+    "    / \\   _ __   __ _| |_   _| |_(_) ___ ___",
+    "   / _ \\ | '_ \\ / _` | | | | | __| |/ __/ __|",
+    "  / ___ \\| | | | (_| | | |_| | |_| | (__\\__ \\",
+    " /_/   \\_\\_| |_|\\__,_|_|\\__, |\\__|_|\\___|___/",
+    "                         |___/",
+]
+
+# Anthropic/Claude orange: \033[38;2;255;149;0m (RGB 255, 149, 0)
+ORANGE = "\033[38;2;227;115;34m"
+RESET = "\033[0m"
+BANNER = "\n" + "\n".join(f"{ORANGE}{line}{RESET}" for line in BANNER_LINES) + "\n"
 
 
 def open_in_browser(filepath):
@@ -56,6 +53,19 @@ def open_in_browser(filepath):
 
 
 def main():
+    # Load .env if present (for ANTHROPIC_API_KEY)
+    env_path = Path.cwd() / ".env"
+    if env_path.exists():
+        with open(env_path) as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, _, val = line.partition("=")
+                    key = key.strip()
+                    val = val.strip().strip("'\"")
+                    if key and key not in os.environ:
+                        os.environ[key] = val
+
     parser = argparse.ArgumentParser(
         prog="claude-analytics",
         description="Analyze your Claude Code usage and level up your prompting.",
@@ -105,7 +115,7 @@ def main():
     print()
 
     # Step 1: Find Claude directory
-    print("[1/4] Locating Claude data...")
+    print(f"{ORANGE}[1/5]{RESET} Locating Claude data...")
     try:
         if args.claude_dir:
             claude_dir = Path(args.claude_dir)
@@ -133,7 +143,7 @@ def main():
             print(f"  Filtering to data since: {since_date}")
 
     # Step 2: Parse sessions
-    print("[2/4] Parsing sessions...")
+    print(f"{ORANGE}[2/5]{RESET} Parsing sessions...")
     try:
         data = parse_all_sessions(claude_dir, tz_offset=args.tz_offset, since_date=since_date)
         summary = data["dashboard"]["summary"]
@@ -148,19 +158,26 @@ def main():
         print(f"  Error: {e}")
         sys.exit(1)
 
-    # Step 3: Generate recommendations
-    print("[3/4] Analyzing prompts...")
+    # Step 3: Heuristic analysis
+    print(f"{ORANGE}[3/5]{RESET} Analyzing prompt patterns...")
     use_api = not args.no_api
     if use_api and not os.environ.get("ANTHROPIC_API_KEY"):
-        print("  ANTHROPIC_API_KEY not set, using heuristic analysis")
+        print("  ANTHROPIC_API_KEY not set, using heuristic analysis only")
         print("  (set the key or use --no-api to skip this message)")
         use_api = False
+
+    # Step 4: AI analysis (if key available)
+    if use_api:
+        print(f"{ORANGE}[4/5]{RESET} Generating AI-powered recommendations (Claude Opus)...")
+    else:
+        print(f"{ORANGE}[4/5]{RESET} Generating heuristic recommendations...")
     recommendations = generate_recommendations(data, use_api=use_api)
     rec_count = len(recommendations.get("recommendations", []))
-    print(f"  Generated {rec_count} recommendations ({recommendations['source']})")
+    source_label = "AI + heuristic" if recommendations["source"] == "ai" else "heuristic"
+    print(f"  {rec_count} recommendations ({source_label})")
 
-    # Step 4: Generate report
-    print("[4/4] Generating report...")
+    # Step 5: Generate report
+    print(f"{ORANGE}[5/5]{RESET} Generating report...")
     html = generate_html(data, recommendations)
     output_path = write_report(html, output_path=args.output)
     print(f"  Report saved to: {output_path}")

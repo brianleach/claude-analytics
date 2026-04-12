@@ -1,12 +1,15 @@
 """AI-powered prompt analysis using Claude API."""
 
+from __future__ import annotations
+
 import json
 import os
 import sys
-import random
+import threading
+import time
 
 
-def find_example_prompts(prompts, category, max_count=3, max_len=150):
+def find_example_prompts(prompts: list[dict], category: str, max_count: int = 3, max_len: int = 150) -> list[str]:
     """Find real example prompts from a specific category."""
     matches = [p for p in prompts if p.get("category") == category and len(p.get("text", "")) > 15]
     # Prefer shorter prompts that illustrate the problem
@@ -14,7 +17,7 @@ def find_example_prompts(prompts, category, max_count=3, max_len=150):
     return [p["text"][:max_len] for p in matches[:max_count]]
 
 
-def find_short_prompts(prompts, max_chars=50, max_count=5):
+def find_short_prompts(prompts: list[dict], max_chars: int = 50, max_count: int = 5) -> list[str]:
     """Find real examples of short prompts the user sent."""
     short = [p for p in prompts if p.get("full_length", 0) < max_chars and len(p.get("text", "").strip()) > 3]
     # Pick a diverse sample
@@ -24,9 +27,18 @@ def find_short_prompts(prompts, max_chars=50, max_count=5):
     return [p["text"][:80] for p in short]
 
 
-def get_heuristic_recommendations(analysis, summary, work_days, prompts=None,
-                                   models=None, subagents=None, context_efficiency=None,
-                                   branches=None, skills=None):
+def get_heuristic_recommendations(
+    analysis: dict,
+    summary: dict,
+    work_days: list[dict] | None,
+    prompts: list[dict] | None = None,
+    models: list[dict] | None = None,
+    subagents: dict | None = None,
+    context_efficiency: dict | None = None,
+    branches: list[dict] | None = None,
+    skills: list[dict] | None = None,
+    permission_modes: dict | None = None,
+) -> list[dict]:
     """Generate recommendations using local heuristics (no API needed).
 
     Now uses actual prompt examples and expanded data for richer tips.
@@ -104,6 +116,17 @@ def get_heuristic_recommendations(analysis, summary, work_days, prompts=None,
     # 2. High confirmation ratio — you're just saying "yes" a lot
     if confirm_pct > 15:
         confirm_examples = find_example_prompts(prompts, "confirmation")
+        example_block = ""
+        if confirm_examples:
+            example_block = "Your confirmation prompts include:\n"
+            for ex in confirm_examples[:3]:
+                example_block += f'  > "{ex}"\n'
+            example_block += "\nEliminate these by adding to CLAUDE.md:\n"
+            example_block += (
+                "- Auto-fix lint errors without asking\n"
+                "- Run tests after every code change\n"
+                "- Commit with descriptive messages, don't ask for approval"
+            )
         recs.append({
             "title": "Reduce confirmation ping-pong",
             "severity": "medium",
@@ -114,7 +137,7 @@ def get_heuristic_recommendations(analysis, summary, work_days, prompts=None,
                 "use permission mode flags to reduce approval prompts."
             ),
             "metric": f"{confirm_pct}% confirmations | target: <10%",
-            "example": (
+            "example": example_block or (
                 "Add to CLAUDE.md:\n"
                 "- Auto-fix lint errors without asking\n"
                 "- Run tests after every code change\n"
@@ -421,12 +444,113 @@ def get_heuristic_recommendations(analysis, summary, work_days, prompts=None,
                 ),
             })
 
+    # ──────────────────────────────────────────────
+    # BORIS CHERNY BEST PRACTICES
+    # (inspired by the Claude Code creator's workflow tips)
+    # ──────────────────────────────────────────────
+
+    permission_modes = permission_modes or {}
+
+    # 15. Verification feedback loop — the #1 tip from Boris
+    if build_pct > 10 and test_pct < 5:
+        recs.append({
+            "title": "Give Claude a way to verify its work",
+            "severity": "high",
+            "body": (
+                f"You're building {build_pct}% of the time but only testing {test_pct}%. "
+                "The single most impactful Claude Code habit: give it a feedback loop. "
+                "When Claude can run tests after every change, output quality jumps 2-3x. "
+                "Add test commands to CLAUDE.md so Claude runs them automatically."
+            ),
+            "metric": f"{build_pct}% building | {test_pct}% testing | recommended: test every change",
+            "example": (
+                "Add to CLAUDE.md:\n"
+                "- After ANY code change, run: npm test -- --related\n"
+                "- After UI changes, run: npx playwright test\n"
+                "- Before committing, run: npm run lint && npm run typecheck\n\n"
+                "Or use a PostToolUse hook in .claude/settings.json to auto-format/test."
+            ),
+        })
+
+    # 16. Permission mode — prefer /permissions over dangerously-skip
+    default_pct = permission_modes.get("default", 0)
+    auto_pct = permission_modes.get("auto", 0)
+    total_pm = sum(permission_modes.values()) or 1
+    if default_pct / total_pm > 0.5:
+        recs.append({
+            "title": "Use /permissions instead of clicking allow",
+            "severity": "medium",
+            "body": (
+                f"{default_pct / total_pm * 100:.0f}% of your messages are in default permission mode. "
+                "You're likely clicking 'allow' repeatedly for safe commands. Use /permissions "
+                "to pre-approve safe commands (git, npm test, lint) and check them into "
+                ".claude/settings.json to share with your team."
+            ),
+            "metric": f"{default_pct / total_pm * 100:.0f}% default mode | consider: acceptEdits or custom permissions",
+            "example": (
+                "In .claude/settings.json:\n"
+                '{"permissions": {"allow": [\n'
+                '  "Bash(npm test*)", "Bash(npm run lint*)",\n'
+                '  "Bash(git status*)", "Bash(git diff*)",\n'
+                '  "Read", "Glob", "Grep"\n'
+                "]}}\n\n"
+                "Safer than --dangerously-skip-permissions, shared via git."
+            ),
+        })
+
+    # 17. Hooks for formatting — if we see many short debugging prompts about lint/format
+    format_prompts = [p for p in prompts if any(
+        w in p.get("text", "").lower()
+        for w in ["lint", "format", "prettier", "eslint", "formatting"]
+    )]
+    if len(format_prompts) > 5:
+        recs.append({
+            "title": "Use a PostToolUse hook for auto-formatting",
+            "severity": "medium",
+            "body": (
+                f"You have {len(format_prompts)} prompts about formatting/linting. "
+                "Set up a PostToolUse hook to auto-format code after Claude edits it. "
+                "Claude generates well-formatted code 90% of the time — the hook handles "
+                "the last 10% so you never waste prompts on formatting issues."
+            ),
+            "metric": f"{len(format_prompts)} format-related prompts | target: 0 (automated)",
+            "example": (
+                "In .claude/settings.json:\n"
+                '{"hooks": {"PostToolUse": [{\n'
+                '  "matcher": "Edit|Write",\n'
+                '  "command": "npx prettier --write $FILE_PATH"\n'
+                "}]}}\n\n"
+                "Now every file Claude touches is auto-formatted."
+            ),
+        })
+
+    # 18. Long sessions — suggest background agents for verification
+    long_sessions = [s for s in (work_days or []) if s.get("active_hrs", 0) > 4]
+    if len(long_sessions) > 3:
+        recs.append({
+            "title": "Use background agents for long tasks",
+            "severity": "low",
+            "body": (
+                f"You have {len(long_sessions)} sessions over 4 hours. For long-running "
+                "tasks, ask Claude to verify its work with a background agent when done, "
+                "or use an AgentStop hook to run validation automatically. This catches "
+                "drift and regressions in marathon sessions."
+            ),
+            "metric": f"{len(long_sessions)} sessions > 4h active time",
+            "example": (
+                "At the end of a long feature task, say:\n"
+                '"Before you finish, run the full test suite and verify all TypeScript '
+                'types still compile. If anything fails, fix it."\n\n'
+                "Or add a Stop hook that runs tests when a session ends."
+            ),
+        })
+
     return recs
 
 
 def get_ai_recommendations(analysis, summary, prompts_sample, work_days,
                             models=None, subagents=None, context_efficiency=None,
-                            branches=None, skills=None):
+                            branches=None, skills=None, permission_modes=None):
     """Generate recommendations using Claude API for deeper, personalized analysis."""
     api_key = os.environ.get("ANTHROPIC_API_KEY")
     if not api_key:
@@ -513,72 +637,128 @@ def get_ai_recommendations(analysis, summary, prompts_sample, work_days,
             for b in branches[:10]
         )
 
-    prompt = f"""You are an expert Claude Code productivity coach. Analyze this developer's usage patterns and provide specific, actionable recommendations to help them get more out of Claude Code.
+    # Permission modes
+    permission_modes = permission_modes or {}
+    pm_text = "No permission data"
+    if permission_modes:
+        total_pm = sum(permission_modes.values())
+        pm_text = ", ".join(
+            f"{k}: {v} ({round(v/total_pm*100)}%)"
+            for k, v in sorted(permission_modes.items(), key=lambda x: -x[1])
+        )
 
-Be direct, specific, and reference their actual data. Don't be generic — every recommendation should cite a specific number, pattern, or example from their usage. Think of this as a personalized coaching session.
+    prompt = f"""You are a senior Claude Code power user coaching another developer. You know Claude Code deeply — its features, hidden capabilities, and common anti-patterns. Your job: look at this developer's ACTUAL usage data and tell them exactly what to change.
 
-## Usage Overview
-- Total prompts: {analysis['total_prompts']} across {summary['total_sessions']} sessions, {summary['unique_projects']} projects
+Rules for your recommendations:
+- NEVER be generic. Every sentence must reference a specific number, project name, or prompt from their data.
+- Quote their ACTUAL prompts in examples (from the samples below) and rewrite them better.
+- Know Claude Code features: CLAUDE.md files, /model switching (opus/sonnet/haiku), subagent types (Explore for search, general-purpose for code changes), permission modes, hooks, extended thinking, MCP integrations, /compact command, worktrees.
+- Think in terms of ROI: what change saves them the most time or money per effort?
+- Be blunt. If they're wasting money, say so with the dollar amount. If their prompts suck, show them why.
+
+## Their Data
+
+### Overview
+- {analysis['total_prompts']} prompts across {summary['total_sessions']} sessions, {summary['unique_projects']} projects
 - Date range: {summary['date_range_start']} to {summary['date_range_end']}
 - Average prompt length: {analysis['avg_length']} chars
-- Estimated total API cost: ${summary.get('estimated_cost', 0):.2f}
+- Estimated API cost: ${summary.get('estimated_cost', 0):.2f}
 - {work_summary}
 
-## Prompt Categories
+### Prompt Categories (what they ask Claude to do)
 {cat_summary}
 
-## Prompt Length Distribution
+### Prompt Length Distribution
 {len_summary}
 
-## Model Usage
+### Model Usage & Cost
 {model_text}
 
-## Subagent Usage
+### Subagent Usage
 {sa_text}
 
-## Context Window Efficiency
+### Context Window Efficiency
 {ce_text}
 
-## Git Branch Activity
+### Git Branch Activity
 {branch_text}
 
-## Project Quality Scores
+### Permission Modes
+{pm_text}
+
+### Project Quality Scores (per-project prompt patterns)
 {json.dumps(analysis['project_quality'][:8], indent=2)}
 
-## Sample Prompts (real examples from this user)
+### REAL Prompts From This User (use these in before/after examples)
 {sample_text}
 
-## Instructions
+## Expert Best Practices (from Boris Cherny, Claude Code creator)
+Reference these when the user's data shows they're missing these patterns:
+- PostToolUse hooks to auto-format code (handles the last 10% of formatting, avoids CI failures)
+- /permissions to pre-allow safe commands instead of --dangerously-skip-permissions. Check into .claude/settings.json and share with team.
+- MCP integrations for Slack, BigQuery, Sentry, etc. — Claude should use ALL your tools, not just code.
+- For long-running tasks: verify work with a background agent, or use an AgentStop hook.
+- THE #1 TIP: Give Claude a way to verify its work. If it can run tests after every change, output quality jumps 2-3x.
+- CLAUDE.md should contain: project conventions, how to run tests, what to do automatically (don't ask).
 
-Provide 7-10 recommendations as a JSON array. Each recommendation:
-- "title": short, punchy, actionable (imperative mood, max 8 words)
-- "severity": "high", "medium", or "low"
-- "body": 2-4 sentences. Reference their SPECIFIC numbers and patterns. Explain the WHY and the IMPACT.
-- "metric": one-line with their current number vs target/benchmark
-- "example": a CONCRETE example. If critiquing their prompts, show a real prompt they used and how to improve it. Use before/after format where possible.
+## Output Format
 
-Priority order:
-1. HIGH: Things costing them significant time or money right now
-2. MEDIUM: Workflow improvements that compound over time
-3. LOW: Nice-to-have optimizations
+Return a JSON array of 8-10 objects. Each object:
+- "title": imperative, max 8 words, no fluff (e.g. "Stop using Opus for grep" not "Consider optimizing model selection")
+- "severity": "high" (costs real money/time NOW), "medium" (compounds over weeks), "low" (polish)
+- "body": 2-4 sentences. MUST cite specific numbers from their data. Explain what's wrong AND the concrete impact (dollars saved, minutes recovered, bugs prevented).
+- "metric": their current number | target (e.g. "72% Opus spend | target: <30%")
+- "example": Show a REAL prompt they wrote, then show the improved version. Use this format:
+  "Before: [their actual prompt]\\nAfter: [your improved version]\\nWhy: [one sentence explaining the difference]"
+  OR show a Claude Code command/config they should use.
 
-Cover these areas (skip any that don't apply):
-- Prompt quality and specificity (cite their actual short/vague prompts)
-- Model selection strategy (are they using Opus for everything?)
-- Subagent and parallel work patterns
-- Testing and defensive coding habits
-- Session management (compactions, session length)
-- Context window efficiency
-- MCP tool and integration usage
+Ordering: HIGH items first, then MEDIUM, then LOW.
 
-Return ONLY valid JSON array, no markdown fences or commentary."""
+Focus areas (skip if their data doesn't support it):
+1. Money: Are they burning cash on expensive models for simple tasks?
+2. Prompt craft: Show before/after rewrites of their weakest prompts
+3. Feature gaps: Claude Code features they're clearly not using (based on absence in data)
+4. Session hygiene: Are sessions too long? Too many compactions? Context bloat?
+5. Workflow: Could they batch, parallelize, or automate?
+6. Testing/quality: Are they debugging more than building?
+
+Return ONLY the JSON array. No markdown fences, no commentary outside the array."""
+
+    # Spinner runs in a background thread during the API call
+    stop_spinner = threading.Event()
+
+    def spinner():
+        phases = [
+            "Analyzing prompt patterns",
+            "Evaluating model usage",
+            "Reviewing session efficiency",
+            "Checking workflow patterns",
+            "Generating personalized tips",
+        ]
+        chars = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+        i = 0
+        t0 = time.time()
+        while not stop_spinner.is_set():
+            elapsed = int(time.time() - t0)
+            phase = phases[min(elapsed // 10, len(phases) - 1)]
+            sys.stdout.write(f"\r  {chars[i % len(chars)]} {phase}... ({elapsed}s)")
+            sys.stdout.flush()
+            i += 1
+            stop_spinner.wait(0.1)
+        sys.stdout.write("\r" + " " * 60 + "\r")
+        sys.stdout.flush()
+
+    spin_thread = threading.Thread(target=spinner, daemon=True)
+    spin_thread.start()
 
     try:
         response = client.messages.create(
-            model="claude-sonnet-4-20250514",
+            model="claude-opus-4-6",
             max_tokens=4000,
             messages=[{"role": "user", "content": prompt}],
         )
+        stop_spinner.set()
+        spin_thread.join()
         text = response.content[0].text.strip()
         if text.startswith("["):
             recs = json.loads(text)
@@ -591,10 +771,12 @@ Return ONLY valid JSON array, no markdown fences or commentary."""
                 return None, "Could not parse API response as JSON"
         return recs, None
     except Exception as e:
+        stop_spinner.set()
+        spin_thread.join()
         return None, str(e)
 
 
-def generate_recommendations(data, use_api=True):
+def generate_recommendations(data: dict, use_api: bool = True) -> dict:
     """Generate recommendations, trying API first then falling back to heuristics.
 
     Returns:
@@ -609,26 +791,37 @@ def generate_recommendations(data, use_api=True):
     context_efficiency = data.get("context_efficiency", {})
     branches = data.get("branches", [])
     skills = data.get("skills", [])
+    permission_modes = data.get("permission_modes", {})
 
-    # Always generate heuristic recs as fallback
+    # Always generate heuristic recs
     heuristic_recs = get_heuristic_recommendations(
         analysis, summary, work_days, prompts,
-        models, subagents, context_efficiency, branches, skills
+        models, subagents, context_efficiency, branches, skills,
+        permission_modes
     )
 
     if not use_api:
         print("  Using heuristic analysis (--no-api)")
+        for r in heuristic_recs:
+            r["rec_source"] = "heuristic"
         return {"recommendations": heuristic_recs, "source": "heuristic"}
 
-    print("  Generating AI-powered recommendations...")
     ai_recs, error = get_ai_recommendations(
         analysis, summary, prompts[:80], work_days,
-        models, subagents, context_efficiency, branches, skills
+        models, subagents, context_efficiency, branches, skills,
+        permission_modes
     )
 
     if ai_recs:
-        print(f"  AI recommendations generated ({len(ai_recs)} tips)")
-        return {"recommendations": ai_recs, "source": "ai"}
+        # Tag sources
+        for r in ai_recs:
+            r["rec_source"] = "ai"
+        for r in heuristic_recs:
+            r["rec_source"] = "heuristic"
+
+        merged = ai_recs + heuristic_recs
+        print(f"  {len(ai_recs)} AI + {len(heuristic_recs)} heuristic = {len(merged)} recommendations")
+        return {"recommendations": merged, "source": "ai"}
     else:
         print(f"  AI analysis unavailable ({error}), using heuristic analysis")
         return {"recommendations": heuristic_recs, "source": "heuristic"}

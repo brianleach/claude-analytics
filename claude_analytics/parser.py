@@ -1,9 +1,9 @@
 """Parse Claude Code session data from ~/.claude/ directory."""
 
+from __future__ import annotations
+
 import json
-import os
 import re
-import glob
 from datetime import datetime, timedelta, timezone
 from collections import defaultdict
 from pathlib import Path
@@ -17,7 +17,7 @@ MODEL_COSTS = {
 }
 
 
-def match_model_cost(model_str):
+def match_model_cost(model_str: str) -> dict[str, float]:
     """Match a model string to its cost tier."""
     m = (model_str or "").lower()
     if "opus" in m:
@@ -30,15 +30,18 @@ def match_model_cost(model_str):
     return MODEL_COSTS["claude-sonnet-4"]
 
 
-def detect_timezone_offset():
-    """Detect the local timezone offset from UTC in hours."""
+def detect_timezone_offset() -> int:
+    """Detect the local timezone offset from UTC in hours.
+
+    Note: This may be slightly off during DST transitions.
+    """
     now = datetime.now()
     utc_now = datetime.now(timezone.utc).replace(tzinfo=None)
     offset = now - utc_now
     return round(offset.total_seconds() / 3600)
 
 
-def find_claude_dir():
+def find_claude_dir() -> Path:
     """Find the ~/.claude directory."""
     claude_dir = Path.home() / ".claude"
     if not claude_dir.exists():
@@ -49,7 +52,7 @@ def find_claude_dir():
     return claude_dir
 
 
-def find_session_files(claude_dir):
+def find_session_files(claude_dir: Path) -> list[Path]:
     """Find all main session JSONL files (excluding subagents)."""
     projects_dir = claude_dir / "projects"
     if not projects_dir.exists():
@@ -71,7 +74,7 @@ def find_subagent_files(claude_dir):
     return jsonl_files, meta_files
 
 
-def clean_project_name(dirname):
+def clean_project_name(dirname: str) -> str:
     """Convert directory name to readable project name."""
     name = dirname
     home = str(Path.home()).replace("/", "-").replace("\\", "-")
@@ -83,7 +86,7 @@ def clean_project_name(dirname):
     return name or "unknown"
 
 
-def normalize_model_name(model_str):
+def normalize_model_name(model_str: str) -> str:
     """Normalize model string to a clean display name."""
     if not model_str:
         return "unknown"
@@ -97,7 +100,12 @@ def normalize_model_name(model_str):
     return model_str
 
 
-def categorize_prompt(text):
+def _has_word(words: list[str], text: str) -> bool:
+    """Check if any word from the list appears as a whole word in text."""
+    return any(re.search(r'\b' + re.escape(w) + r'\b', text) for w in words)
+
+
+def categorize_prompt(text: str) -> str:
     """Categorize a user prompt by intent."""
     t = text.lower().strip()
     if len(t) < 5:
@@ -111,31 +119,31 @@ def categorize_prompt(text):
     ):
         return "confirmation"
 
-    if any(
-        w in t
-        for w in [
+    if _has_word(
+        [
             "error", "bug", "fix", "broken", "crash", "fail", "issue",
             "wrong", "not working", "doesn't work", "won't", "undefined",
             "null", "exception", "traceback",
-        ]
+        ],
+        t,
     ):
         return "debugging"
 
-    if any(
-        w in t
-        for w in [
+    if _has_word(
+        [
             "add", "create", "build", "implement", "make", "new feature",
             "set up", "setup", "write", "generate",
-        ]
+        ],
+        t,
     ):
         return "building"
 
-    if any(
-        w in t
-        for w in [
+    if _has_word(
+        [
             "refactor", "clean up", "rename", "move", "restructure",
             "reorganize", "simplify", "extract",
-        ]
+        ],
+        t,
     ):
         return "refactoring"
 
@@ -145,31 +153,31 @@ def categorize_prompt(text):
     )):
         return "question"
 
-    if any(
-        w in t
-        for w in [
+    if _has_word(
+        [
             "review", "check", "look at", "examine", "inspect", "analyze",
             "show me", "read", "list", "find",
-        ]
+        ],
+        t,
     ):
         return "review"
 
-    if any(
-        w in t
-        for w in ["update", "change", "modify", "edit", "replace", "remove",
-                   "delete", "tweak", "adjust"]
+    if _has_word(
+        ["update", "change", "modify", "edit", "replace", "remove",
+         "delete", "tweak", "adjust"],
+        t,
     ):
         return "editing"
 
-    if any(w in t for w in ["test", "spec", "coverage", "assert", "expect"]):
+    if _has_word(["test", "spec", "coverage", "assert", "expect"], t):
         return "testing"
 
-    if any(
-        w in t
-        for w in [
+    if _has_word(
+        [
             "commit", "push", "deploy", "merge", "branch", "pr ",
             "pull request", "git ",
-        ]
+        ],
+        t,
     ):
         return "git_ops"
 
@@ -179,7 +187,7 @@ def categorize_prompt(text):
     return "detailed"
 
 
-def length_bucket(length):
+def length_bucket(length: int) -> str:
     """Classify prompt length into a bucket."""
     if length < 20:
         return "micro (<20)"
@@ -399,6 +407,7 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
     total_conversation_tokens = 0
     skill_usage = defaultdict(int)
     slash_commands = defaultdict(int)
+    permission_modes = defaultdict(int)
 
     for filepath in session_files:
         project_dir = filepath.parent.name
@@ -431,13 +440,16 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
                     msg_type = d.get("type")
                     ts = d.get("timestamp")
 
-                    # Track version and branch
+                    # Track version, branch, permission mode
                     ver = d.get("version")
                     if ver:
                         version_counts[ver] += 1
                     br = d.get("gitBranch")
                     if br and br != "HEAD":
                         git_branch = br
+                    pm = d.get("permissionMode")
+                    if pm:
+                        permission_modes[pm] += 1
 
                     if msg_type == "user" and ts:
                         dt = datetime.fromisoformat(
@@ -1001,5 +1013,6 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         "versions": version_data,
         "skills": skill_data,
         "slash_commands": slash_command_data,
+        "permission_modes": dict(permission_modes),
         "config": config,
     }
