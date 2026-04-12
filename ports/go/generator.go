@@ -25,9 +25,10 @@ type Payload struct {
 	Branches          interface{} `json:"branches"`
 	ContextEfficiency interface{} `json:"context_efficiency"`
 	Versions          interface{} `json:"versions"`
-	Skills            interface{} `json:"skills"`
-	SlashCommands     interface{} `json:"slash_commands"`
-	Config            interface{} `json:"config"`
+	Skills            interface{}    `json:"skills"`
+	SlashCommands     interface{}    `json:"slash_commands"`
+	PermissionModes   map[string]int `json:"permission_modes"`
+	Config            interface{}    `json:"config"`
 }
 
 // GenerateHTML generates the final HTML dashboard.
@@ -45,6 +46,7 @@ func GenerateHTML(data *ParseResult, recommendations RecommendationResult) strin
 		Versions:          data.Versions,
 		Skills:            data.Skills,
 		SlashCommands:     data.SlashCommands,
+		PermissionModes:   data.PermissionModes,
 		Config:            data.Config,
 	}
 

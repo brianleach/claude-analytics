@@ -24,6 +24,7 @@ pub fn generate_html(data: &Value, recommendations: &Value) -> String {
         "versions": data.get("versions").unwrap_or(&empty_arr),
         "skills": data.get("skills").unwrap_or(&empty_arr),
         "slash_commands": data.get("slash_commands").unwrap_or(&empty_arr),
+        "permission_modes": data.get("permission_modes").unwrap_or(&empty_obj),
         "config": data.get("config").unwrap_or(&empty_obj),
     });
 

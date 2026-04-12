@@ -53,6 +53,7 @@ export function generateHtml(
     skills: data.skills || [],
     slash_commands: data.slash_commands || [],
     config: data.config || {},
+    permission_modes: data.permission_modes || {},
   };
 
   const payloadJson = JSON.stringify(payload);
