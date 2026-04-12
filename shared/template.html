@@ -439,7 +439,7 @@
             document.getElementById('recSubtitle').innerHTML=D.analysis.total_prompts+' prompts analyzed · <span style="color:'+sourceColor+';font-weight:600">'+sourceLabel+'</span>';
 
             const sevOrder={high:0,medium:1,low:2};
-            const sortBySev=(a,b)=>(sevOrder[a.severity]||2)-(sevOrder[b.severity]||2);
+            const sortBySev=(a,b)=>(sevOrder[a.severity]??2)-(sevOrder[b.severity]??2);
             const aiRecs=r.recommendations.filter(rec=>(rec.rec_source||'heuristic')==='ai').sort(sortBySev);
             const heuristicRecs=r.recommendations.filter(rec=>(rec.rec_source||'heuristic')==='heuristic').sort(sortBySev);
 
