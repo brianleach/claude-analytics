@@ -465,8 +465,10 @@
                         }
                         if(s.startsWith('After:')){
                             const content=s.replace(/^After:\s*/,'');
-                            const copyText=content.replace(/<br>/g,'\n').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'");
-                            return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="color:var(--text-primary);font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase">After</span><button onclick="navigator.clipboard.writeText(${JSON.stringify(raw.match(/^After:\s*(.+?)(?:\nWhy:|\n\n|$)/ms)?.[1]?.trim()||'')});this.textContent='copied!';setTimeout(()=>this.textContent='copy',1500)" style="background:none;border:1px solid var(--border-color);color:var(--text-muted);cursor:pointer;padding:1px 6px;font-family:'JetBrains Mono',monospace;font-size:9px;border-radius:2px">copy</button></div><div style="padding:8px 10px;background:rgba(51,255,136,0.06);border-left:2px solid var(--text-primary);border-radius:0 2px 2px 0;color:var(--text-primary);line-height:1.5">${content.replace(/\n/g,'<br>')}</div></div>`;
+                            const copyId='copy-'+Math.random().toString(36).substr(2,6);
+                            const afterText=(raw.match(/^After:\s*(.+?)(?:\nWhy:|\n\n|$)/ms)||[])[1]||'';
+                            window['_cp_'+copyId]=afterText.trim();
+                            return`<div style="margin-bottom:10px"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:4px"><span style="color:var(--text-primary);font-weight:700;font-size:10px;letter-spacing:1px;text-transform:uppercase">After</span><button id="${copyId}" style="background:none;border:1px solid var(--border-color);color:var(--text-muted);cursor:pointer;padding:1px 6px;font-family:monospace;font-size:9px;border-radius:2px">copy</button></div><div style="padding:8px 10px;background:rgba(51,255,136,0.06);border-left:2px solid var(--text-primary);border-radius:0 2px 2px 0;color:var(--text-primary);line-height:1.5">${content.replace(/\n/g,'<br>')}</div></div>`;
                         }
                         if(s.startsWith('Why:')){
                             const content=s.replace(/^Why:\s*/,'');
@@ -490,6 +492,15 @@
                 hHeader.textContent='Pattern-Based Recommendations ('+heuristicRecs.length+')';c.appendChild(hHeader);
                 heuristicRecs.forEach(rec=>c.appendChild(renderRecCard(rec)));
             }
+            // Bind copy buttons
+            c.querySelectorAll('button[id^="copy-"]').forEach(btn=>{
+                btn.addEventListener('click',()=>{
+                    const text=window['_cp_'+btn.id]||'';
+                    navigator.clipboard.writeText(text);
+                    btn.textContent='copied!';
+                    setTimeout(()=>btn.textContent='copy',1500);
+                });
+            });
         }
 
         function renderWorkHours(){
