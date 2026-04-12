@@ -3,8 +3,17 @@ set -e
 
 CLAUDE_DIR="$HOME/.claude"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+USE_AI="${1:---no-api}"  # pass --ai to enable AI recommendations
 RESULTS=()
 TIMES=()
+
+if [ "$USE_AI" = "--ai" ]; then
+    API_FLAGS=""
+    echo "  Mode: WITH AI recommendations (Opus API)"
+else
+    API_FLAGS="--no-api"
+    echo "  Mode: heuristic only (pass --ai to include Opus API call)"
+fi
 
 TOTAL_START=$(python3 -c "import time; print(time.time())")
 
@@ -25,7 +34,7 @@ if [ -f "$PY_DIR/setup.py" ] && command -v python3 &>/dev/null; then
         source "$SCRIPT_DIR/.venv/bin/activate" 2>/dev/null || true
     fi
     START=$(python3 -c "import time; print(time.time())")
-    python3 -m claude_analytics --no-api --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-python.html 2>&1 | tail -3
+    python3 -m claude_analytics $API_FLAGS --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-python.html 2>&1 | tail -3
     END=$(python3 -c "import time; print(time.time())")
     ELAPSED=$(python3 -c "print(f'{$END - $START:.3f}')")
     echo "  Time: ${ELAPSED}s"
@@ -51,9 +60,9 @@ if [ -f "$TS_DIR/package.json" ]; then
     fi
     START=$(python3 -c "import time; print(time.time())")
     if [ -f "dist/cli.js" ]; then
-        node dist/cli.js --no-api --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-typescript.html 2>&1 | tail -3
+        node dist/cli.js $API_FLAGS --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-typescript.html 2>&1 | tail -3
     elif [ -f "src/cli.ts" ]; then
-        npx ts-node src/cli.ts --no-api --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-typescript.html 2>&1 | tail -3
+        npx ts-node src/cli.ts $API_FLAGS --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-typescript.html 2>&1 | tail -3
     else
         echo "  SKIP: no entry point found"
     fi
@@ -77,7 +86,8 @@ if [ -f "$GO_DIR/go.mod" ]; then
         go build -o claude-analytics . 2>&1
     fi
     START=$(python3 -c "import time; print(time.time())")
-    ./claude-analytics -no-api -no-open -claude-dir "$CLAUDE_DIR" -output /tmp/bench-go.html 2>&1 | tail -3
+    GO_API_FLAG=$([ "$USE_AI" = "--ai" ] && echo "" || echo "-no-api")
+    ./claude-analytics $GO_API_FLAG -no-open -claude-dir "$CLAUDE_DIR" -output /tmp/bench-go.html 2>&1 | tail -3
     END=$(python3 -c "import time; print(time.time())")
     ELAPSED=$(python3 -c "print(f'{$END - $START:.3f}')")
     echo "  Time: ${ELAPSED}s"
@@ -98,7 +108,7 @@ if [ -f "$RUST_DIR/Cargo.toml" ]; then
         cargo build --release 2>&1 | tail -3
     fi
     START=$(python3 -c "import time; print(time.time())")
-    ./target/release/claude-analytics --no-api --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-rust.html 2>&1 | tail -3
+    ./target/release/claude-analytics $API_FLAGS --no-open --claude-dir "$CLAUDE_DIR" -o /tmp/bench-rust.html 2>&1 | tail -3
     END=$(python3 -c "import time; print(time.time())")
     ELAPSED=$(python3 -c "print(f'{$END - $START:.3f}')")
     echo "  Time: ${ELAPSED}s"

@@ -1,4 +1,9 @@
 use serde_json::Value;
+use std::io::Write;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::thread;
+use std::time::{Duration, Instant};
 
 fn find_example_prompts(prompts: &[Value], category: &str, max_count: usize, max_len: usize) -> Vec<String> {
     let mut matches: Vec<&Value> = prompts.iter()
@@ -584,18 +589,387 @@ pub fn get_heuristic_recommendations(data: &Value) -> Vec<Value> {
     recs
 }
 
-pub fn generate_recommendations(data: &Value) -> Value {
+pub fn get_ai_recommendations(data: &Value) -> Result<Vec<Value>, String> {
+    let api_key = std::env::var("ANTHROPIC_API_KEY")
+        .map_err(|_| "ANTHROPIC_API_KEY not set".to_string())?;
+
+    let analysis = &data["analysis"];
+    let summary = &data["dashboard"]["summary"];
+    let prompts: Vec<Value> = data.get("prompts").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let models: Vec<Value> = data.get("models").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let subagents = data.get("subagents").cloned().unwrap_or(Value::Object(Default::default()));
+    let context_efficiency = data.get("context_efficiency").cloned().unwrap_or(Value::Object(Default::default()));
+    let branches: Vec<Value> = data.get("branches").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+    let permission_modes = data.get("permission_modes").cloned().unwrap_or(Value::Object(Default::default()));
+    let work_days: Vec<Value> = data.get("work_days").and_then(|v| v.as_array()).cloned().unwrap_or_default();
+
+    // Build category summary
+    let cat_summary = analysis["categories"]
+        .as_array()
+        .map(|cats| {
+            cats.iter()
+                .take(8)
+                .filter_map(|c| {
+                    let cat = c["cat"].as_str()?;
+                    let pct = c["pct"].as_f64()?;
+                    Some(format!("{}: {}%", cat, pct))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+
+    // Build length summary
+    let len_summary = analysis["length_buckets"]
+        .as_array()
+        .map(|lbs| {
+            lbs.iter()
+                .filter_map(|l| {
+                    let bucket = l["bucket"].as_str()?;
+                    let pct = l["pct"].as_f64()?;
+                    Some(format!("{}: {}%", bucket, pct))
+                })
+                .collect::<Vec<_>>()
+                .join(", ")
+        })
+        .unwrap_or_default();
+
+    // Sample prompts by category
+    let prompts_sample: Vec<&Value> = prompts.iter().take(80).collect();
+    let mut sample_by_cat: std::collections::HashMap<String, Vec<&Value>> = std::collections::HashMap::new();
+    for p in &prompts_sample {
+        let cat = p.get("category").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
+        let entry = sample_by_cat.entry(cat).or_default();
+        if entry.len() < 5 {
+            entry.push(p);
+        }
+    }
+
+    let mut sample_text = String::new();
+    let mut cats_sorted: Vec<_> = sample_by_cat.iter().collect();
+    cats_sorted.sort_by(|a, b| b.1.len().cmp(&a.1.len()));
+    for (cat, samples) in &cats_sorted {
+        sample_text.push_str(&format!("\n### {} ({} samples)\n", cat, samples.len()));
+        for s in *samples {
+            let text = s.get("text").and_then(|v| v.as_str()).unwrap_or("");
+            let text_trunc = if text.len() > 300 { &text[..300] } else { text };
+            let length = s.get("full_length").and_then(|v| v.as_i64()).unwrap_or(text.len() as i64);
+            let project = s.get("project").and_then(|v| v.as_str()).unwrap_or("");
+            sample_text.push_str(&format!("  [{}] ({}ch) \"{}\"\n", project, length, text_trunc));
+        }
+    }
+
+    // Work pattern
+    let work_summary = if work_days.is_empty() {
+        "No work pattern data".to_string()
+    } else {
+        let total_active: f64 = work_days.iter()
+            .filter_map(|d| d.get("active_hrs").and_then(|v| v.as_f64()))
+            .sum();
+        let avg_daily = total_active / work_days.len() as f64;
+        let avg_prompts: f64 = work_days.iter()
+            .filter_map(|d| d.get("prompts").and_then(|v| v.as_f64()))
+            .sum::<f64>() / work_days.len() as f64;
+        format!(
+            "Active days: {}, avg active hours/day: {:.1}h, avg prompts/day: {:.0}, total active hours: {:.1}h",
+            work_days.len(), avg_daily, avg_prompts, total_active
+        )
+    };
+
+    // Model usage
+    let model_text = if models.is_empty() {
+        "No model data".to_string()
+    } else {
+        models.iter()
+            .filter(|m| m["msgs"].as_i64().unwrap_or(0) > 0)
+            .filter_map(|m| {
+                let display = m["display"].as_str()?;
+                let msgs = m["msgs"].as_i64()?;
+                let cost = m["estimated_cost"].as_f64().unwrap_or(0.0);
+                Some(format!("  {}: {} msgs, ${:.2} estimated cost", display, msgs, cost))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Subagent usage
+    let sa_text = if subagents.get("total_count").and_then(|v| v.as_i64()).unwrap_or(0) > 0 {
+        format!(
+            "Total: {}, Compactions: {}\n  Types: {}\n  Subagent cost: ${:.2}",
+            subagents["total_count"],
+            subagents["compaction_count"],
+            subagents.get("type_counts").unwrap_or(&Value::Object(Default::default())),
+            subagents.get("estimated_cost").and_then(|v| v.as_f64()).unwrap_or(0.0)
+        )
+    } else {
+        "No subagent data".to_string()
+    };
+
+    // Context efficiency
+    let ce_text = if context_efficiency.is_object() && !context_efficiency.as_object().unwrap().is_empty() {
+        format!(
+            "Tool output: {}%, Conversation: {}%, Thinking blocks: {}, Subagent output share: {}%",
+            context_efficiency.get("tool_pct").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            context_efficiency.get("conversation_pct").and_then(|v| v.as_f64()).unwrap_or(0.0),
+            context_efficiency.get("thinking_blocks").and_then(|v| v.as_i64()).unwrap_or(0),
+            context_efficiency.get("subagent_pct").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        )
+    } else {
+        "No context data".to_string()
+    };
+
+    // Branch summary
+    let branch_text = if branches.is_empty() {
+        "No branch data".to_string()
+    } else {
+        branches.iter()
+            .take(10)
+            .filter_map(|b| {
+                let branch = b["branch"].as_str()?;
+                let msgs = b["msgs"].as_i64()?;
+                let sessions = b["sessions"].as_i64()?;
+                Some(format!("  {}: {} msgs, {} sessions", branch, msgs, sessions))
+            })
+            .collect::<Vec<_>>()
+            .join("\n")
+    };
+
+    // Permission modes
+    let pm_text = if let Some(pm_obj) = permission_modes.as_object() {
+        if pm_obj.is_empty() {
+            "No permission data".to_string()
+        } else {
+            let total_pm: i64 = pm_obj.values().filter_map(|v| v.as_i64()).sum();
+            let total_pm = total_pm.max(1);
+            let mut entries: Vec<_> = pm_obj.iter()
+                .filter_map(|(k, v)| {
+                    let count = v.as_i64()?;
+                    Some((k.clone(), count))
+                })
+                .collect();
+            entries.sort_by(|a, b| b.1.cmp(&a.1));
+            entries.iter()
+                .map(|(k, v)| format!("{}: {} ({}%)", k, v, (*v as f64 / total_pm as f64 * 100.0).round() as i64))
+                .collect::<Vec<_>>()
+                .join(", ")
+        }
+    } else {
+        "No permission data".to_string()
+    };
+
+    // Project quality
+    let project_quality = analysis.get("project_quality")
+        .and_then(|v| v.as_array())
+        .map(|arr| {
+            let slice: Vec<_> = arr.iter().take(8).collect();
+            serde_json::to_string_pretty(&slice).unwrap_or_default()
+        })
+        .unwrap_or_else(|| "[]".to_string());
+
+    let prompt = format!(
+r#"You are a senior Claude Code power user coaching another developer. You know Claude Code deeply — its features, hidden capabilities, and common anti-patterns. Your job: look at this developer's ACTUAL usage data and tell them exactly what to change.
+
+Rules for your recommendations:
+- NEVER be generic. Every sentence must reference a specific number, project name, or prompt from their data.
+- Quote their ACTUAL prompts in examples (from the samples below) and rewrite them better.
+- Know Claude Code features: CLAUDE.md files, /model switching (opus/sonnet/haiku), subagent types (Explore for search, general-purpose for code changes), permission modes, hooks, extended thinking, MCP integrations, /compact command, worktrees.
+- Think in terms of ROI: what change saves them the most time or money per effort?
+- Be blunt. If they're wasting money, say so with the dollar amount. If their prompts suck, show them why.
+
+## Their Data
+
+### Overview
+- {} prompts across {} sessions, {} projects
+- Date range: {} to {}
+- Average prompt length: {} chars
+- Estimated API cost: ${:.2}
+- {}
+
+### Prompt Categories (what they ask Claude to do)
+{}
+
+### Prompt Length Distribution
+{}
+
+### Model Usage & Cost
+{}
+
+### Subagent Usage
+{}
+
+### Context Window Efficiency
+{}
+
+### Git Branch Activity
+{}
+
+### Permission Modes
+{}
+
+### Project Quality Scores (per-project prompt patterns)
+{}
+
+### REAL Prompts From This User (use these in before/after examples)
+{}
+
+## Expert Best Practices (from Boris Cherny, Claude Code creator)
+Reference these when the user's data shows they're missing these patterns:
+- PostToolUse hooks to auto-format code (handles the last 10% of formatting, avoids CI failures)
+- /permissions to pre-allow safe commands instead of --dangerously-skip-permissions. Check into .claude/settings.json and share with team.
+- MCP integrations for Slack, BigQuery, Sentry, etc. — Claude should use ALL your tools, not just code.
+- For long-running tasks: verify work with a background agent, or use an AgentStop hook.
+- THE #1 TIP: Give Claude a way to verify its work. If it can run tests after every change, output quality jumps 2-3x.
+- CLAUDE.md should contain: project conventions, how to run tests, what to do automatically (don't ask).
+
+## Output Format
+
+Return a JSON array of 8-10 objects. Each object:
+- "title": imperative, max 8 words, no fluff (e.g. "Stop using Opus for grep" not "Consider optimizing model selection")
+- "severity": "high" (costs real money/time NOW), "medium" (compounds over weeks), "low" (polish)
+- "body": 2-4 sentences. MUST cite specific numbers from their data. Explain what's wrong AND the concrete impact (dollars saved, minutes recovered, bugs prevented).
+- "metric": their current number | target (e.g. "72% Opus spend | target: <30%")
+- "example": Show a REAL prompt they wrote, then show the improved version. Use this format:
+  "Before: [their actual prompt]\nAfter: [your improved version]\nWhy: [one sentence explaining the difference]"
+  OR show a Claude Code command/config they should use.
+
+Ordering: HIGH items first, then MEDIUM, then LOW.
+
+Focus areas (skip if their data doesn't support it):
+1. Money: Are they burning cash on expensive models for simple tasks?
+2. Prompt craft: Show before/after rewrites of their weakest prompts
+3. Feature gaps: Claude Code features they're clearly not using (based on absence in data)
+4. Session hygiene: Are sessions too long? Too many compactions? Context bloat?
+5. Workflow: Could they batch, parallelize, or automate?
+6. Testing/quality: Are they debugging more than building?
+
+Return ONLY the JSON array. No markdown fences, no commentary outside the array."#,
+        analysis["total_prompts"],
+        summary["total_sessions"],
+        summary["unique_projects"],
+        summary["date_range_start"].as_str().unwrap_or(""),
+        summary["date_range_end"].as_str().unwrap_or(""),
+        analysis["avg_length"],
+        summary.get("estimated_cost").and_then(|v| v.as_f64()).unwrap_or(0.0),
+        work_summary,
+        cat_summary,
+        len_summary,
+        model_text,
+        sa_text,
+        ce_text,
+        branch_text,
+        pm_text,
+        project_quality,
+        sample_text,
+    );
+
+    // Spinner in background thread
+    let stop = Arc::new(AtomicBool::new(false));
+    let stop_clone = Arc::clone(&stop);
+    let spin_handle = thread::spawn(move || {
+        let phases = [
+            "Analyzing prompt patterns",
+            "Evaluating model usage",
+            "Reviewing session efficiency",
+            "Checking workflow patterns",
+            "Generating personalized tips",
+        ];
+        let chars = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        let mut i: usize = 0;
+        let t0 = Instant::now();
+        while !stop_clone.load(Ordering::Relaxed) {
+            let elapsed = t0.elapsed().as_secs() as usize;
+            let phase_idx = (elapsed / 10).min(phases.len() - 1);
+            print!("\r  {} {}... ({}s)", chars[i % chars.len()], phases[phase_idx], elapsed);
+            let _ = std::io::stdout().flush();
+            i += 1;
+            thread::sleep(Duration::from_millis(100));
+        }
+        print!("\r{}\r", " ".repeat(60));
+        let _ = std::io::stdout().flush();
+    });
+
+    // Make the API request
+    let body = serde_json::json!({
+        "model": "claude-opus-4-6",
+        "max_tokens": 4000,
+        "messages": [{"role": "user", "content": prompt}],
+    });
+
+    let result = ureq::post("https://api.anthropic.com/v1/messages")
+        .set("x-api-key", &api_key)
+        .set("anthropic-version", "2023-06-01")
+        .set("content-type", "application/json")
+        .send_json(body);
+
+    stop.store(true, Ordering::Relaxed);
+    let _ = spin_handle.join();
+
+    let response = result.map_err(|e| format!("API request failed: {}", e))?;
+    let resp_body: Value = response.into_json().map_err(|e| format!("Failed to parse response: {}", e))?;
+
+    // Extract text from response
+    let text = resp_body["content"]
+        .as_array()
+        .and_then(|arr| arr.first())
+        .and_then(|block| block["text"].as_str())
+        .ok_or_else(|| "No text content in API response".to_string())?
+        .trim();
+
+    // Parse JSON array from response
+    let recs: Vec<Value> = if text.starts_with('[') {
+        serde_json::from_str(text).map_err(|e| format!("JSON parse error: {}", e))?
+    } else {
+        let start = text.find('[').ok_or("No JSON array found in response")?;
+        let end = text.rfind(']').ok_or("No closing bracket in response")? + 1;
+        serde_json::from_str(&text[start..end]).map_err(|e| format!("JSON parse error: {}", e))?
+    };
+
+    Ok(recs)
+}
+
+pub fn generate_recommendations(data: &Value, use_api: bool) -> Value {
     let heuristic_recs = get_heuristic_recommendations(data);
 
-    let tagged_recs: Vec<Value> = heuristic_recs.into_iter().map(|mut r| {
+    let mut tagged_heuristic: Vec<Value> = heuristic_recs.into_iter().map(|mut r| {
         if let Some(obj) = r.as_object_mut() {
             obj.insert("rec_source".to_string(), Value::String("heuristic".to_string()));
         }
         r
     }).collect();
 
-    serde_json::json!({
-        "recommendations": tagged_recs,
-        "source": "heuristic",
-    })
+    if !use_api {
+        println!("  Using heuristic analysis (--no-api)");
+        return serde_json::json!({
+            "recommendations": tagged_heuristic,
+            "source": "heuristic",
+        });
+    }
+
+    match get_ai_recommendations(data) {
+        Ok(ai_recs) => {
+            let mut tagged_ai: Vec<Value> = ai_recs.into_iter().map(|mut r| {
+                if let Some(obj) = r.as_object_mut() {
+                    obj.insert("rec_source".to_string(), Value::String("ai".to_string()));
+                }
+                r
+            }).collect();
+
+            let ai_count = tagged_ai.len();
+            let heuristic_count = tagged_heuristic.len();
+            tagged_ai.append(&mut tagged_heuristic);
+            println!("  {} AI + {} heuristic = {} recommendations", ai_count, heuristic_count, tagged_ai.len());
+
+            serde_json::json!({
+                "recommendations": tagged_ai,
+                "source": "ai",
+            })
+        }
+        Err(error) => {
+            println!("  AI analysis unavailable ({}), using heuristic analysis", error);
+            serde_json::json!({
+                "recommendations": tagged_heuristic,
+                "source": "heuristic",
+            })
+        }
+    }
 }

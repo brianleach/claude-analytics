@@ -63,6 +63,9 @@ fn open_in_browser(filepath: &PathBuf) {
 }
 
 fn main() {
+    // Load .env file for ANTHROPIC_API_KEY (ignore if missing)
+    let _ = dotenv::dotenv();
+
     let cli = Cli::parse();
 
     // Print banner
@@ -140,19 +143,32 @@ fn main() {
     }
     println!("  Timezone: {}", tz_label);
 
-    // Step 3: Heuristic analysis
+    // Step 3: Analysis
     println!("{}[3/5]{} Analyzing prompt patterns...", ORANGE, RESET);
-    println!("  Using heuristic analysis (--no-api is default in Rust port)");
+    let use_api = !cli.no_api;
+    if use_api {
+        println!("  AI-powered analysis enabled (use --no-api to skip)");
+    } else {
+        println!("  Using heuristic analysis (--no-api)");
+    }
 
     // Step 4: Generate recommendations
-    println!("{}[4/5]{} Generating heuristic recommendations...", ORANGE, RESET);
-    let recommendations = analyzer::generate_recommendations(&data);
+    if use_api {
+        println!("{}[4/5]{} Generating AI-powered recommendations...", ORANGE, RESET);
+    } else {
+        println!("{}[4/5]{} Generating heuristic recommendations...", ORANGE, RESET);
+    }
+    let recommendations = analyzer::generate_recommendations(&data, use_api);
     let rec_count = recommendations
         .get("recommendations")
         .and_then(|v| v.as_array())
         .map(|a| a.len())
         .unwrap_or(0);
-    println!("  {} recommendations (heuristic)", rec_count);
+    let source = recommendations.get("source").and_then(|v| v.as_str()).unwrap_or("heuristic");
+    if source != "ai" && !cli.no_api {
+        // AI was attempted but failed; count already printed by generate_recommendations
+    }
+    println!("  {} total recommendations ({})", rec_count, source);
 
     // Step 5: Generate report
     println!("{}[5/5]{} Generating report...", ORANGE, RESET);

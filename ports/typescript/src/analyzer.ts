@@ -1,6 +1,8 @@
 /**
- * Heuristic prompt analysis and recommendations.
+ * Heuristic + AI-powered prompt analysis and recommendations.
  */
+
+import * as https from "https";
 
 import type {
   Analysis,
@@ -584,13 +586,342 @@ export function getHeuristicRecommendations(
 }
 
 // ============================================================
+// AI-powered recommendations (Claude API)
+// ============================================================
+
+function buildAiPrompt(
+  analysis: Analysis,
+  summary: DashboardSummary,
+  promptsSample: PromptEntry[],
+  workDays: WorkDay[],
+  models: ModelBreakdown[],
+  subagents: SubagentData,
+  contextEfficiency: ContextEfficiency,
+  branches: BranchEntry[],
+  skills: SkillEntry[],
+  permissionModes: Record<string, number>
+): string {
+  const catSummary = analysis.categories
+    .slice(0, 8)
+    .map((c) => `${c.cat}: ${c.pct}%`)
+    .join(", ");
+  const lenSummary = analysis.length_buckets
+    .map((l) => `${l.bucket}: ${l.pct}%`)
+    .join(", ");
+
+  // Sample prompts by category
+  const sampleByCat: Record<string, Array<{ text: string; length: number; project: string }>> = {};
+  for (const p of promptsSample) {
+    const cat = p.category;
+    if (!sampleByCat[cat]) sampleByCat[cat] = [];
+    if (sampleByCat[cat].length < 5) {
+      sampleByCat[cat].push({
+        text: p.text.substring(0, 300),
+        length: p.full_length || p.text.length,
+        project: p.project || "",
+      });
+    }
+  }
+
+  let sampleText = "";
+  const sortedCats = Object.entries(sampleByCat).sort((a, b) => b[1].length - a[1].length);
+  for (const [cat, samples] of sortedCats) {
+    sampleText += `\n### ${cat} (${samples.length} samples)\n`;
+    for (const s of samples) {
+      sampleText += `  [${s.project}] (${s.length}ch) "${s.text}"\n`;
+    }
+  }
+
+  // Work pattern
+  let workSummary = "No work pattern data";
+  if (workDays.length > 0) {
+    const totalActive = workDays.reduce((s, d) => s + (d.active_hrs || 0), 0);
+    const avgDaily = totalActive / workDays.length;
+    const avgPrompts = workDays.reduce((s, d) => s + d.prompts, 0) / workDays.length;
+    workSummary = `Active days: ${workDays.length}, avg active hours/day: ${avgDaily.toFixed(1)}h, avg prompts/day: ${avgPrompts.toFixed(0)}, total active hours: ${totalActive.toFixed(1)}h`;
+  }
+
+  // Model usage
+  let modelText = "No model data";
+  if (models.length > 0) {
+    modelText = models
+      .filter((m) => m.msgs > 0)
+      .map((m) => `  ${m.display}: ${m.msgs} msgs, $${m.estimated_cost.toFixed(2)} estimated cost`)
+      .join("\n");
+  }
+
+  // Subagent usage
+  let saText = "No subagent data";
+  if (subagents && (subagents.total_count || 0) > 0) {
+    saText =
+      `Total: ${subagents.total_count}, Compactions: ${subagents.compaction_count}\n` +
+      `  Types: ${JSON.stringify(subagents.type_counts || {})}\n` +
+      `  Subagent cost: $${(subagents.estimated_cost || 0).toFixed(2)}`;
+  }
+
+  // Context efficiency
+  let ceText = "No context data";
+  if (contextEfficiency) {
+    ceText =
+      `Tool output: ${contextEfficiency.tool_pct || 0}%, Conversation: ${contextEfficiency.conversation_pct || 0}%, ` +
+      `Thinking blocks: ${contextEfficiency.thinking_blocks || 0}, ` +
+      `Subagent output share: ${contextEfficiency.subagent_pct || 0}%`;
+  }
+
+  // Branch summary
+  let branchText = "No branch data";
+  if (branches.length > 0) {
+    branchText = branches
+      .slice(0, 10)
+      .map((b) => `  ${b.branch}: ${b.msgs} msgs, ${b.sessions} sessions`)
+      .join("\n");
+  }
+
+  // Permission modes
+  let pmText = "No permission data";
+  const pmEntries = Object.entries(permissionModes);
+  if (pmEntries.length > 0) {
+    const totalPm = pmEntries.reduce((s, [, v]) => s + v, 0);
+    pmText = pmEntries
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, v]) => `${k}: ${v} (${Math.round((v / totalPm) * 100)}%)`)
+      .join(", ");
+  }
+
+  return `You are a senior Claude Code power user coaching another developer. You know Claude Code deeply — its features, hidden capabilities, and common anti-patterns. Your job: look at this developer's ACTUAL usage data and tell them exactly what to change.
+
+Rules for your recommendations:
+- NEVER be generic. Every sentence must reference a specific number, project name, or prompt from their data.
+- Quote their ACTUAL prompts in examples (from the samples below) and rewrite them better.
+- Know Claude Code features: CLAUDE.md files, /model switching (opus/sonnet/haiku), subagent types (Explore for search, general-purpose for code changes), permission modes, hooks, extended thinking, MCP integrations, /compact command, worktrees.
+- Think in terms of ROI: what change saves them the most time or money per effort?
+- Be blunt. If they're wasting money, say so with the dollar amount. If their prompts suck, show them why.
+
+## Their Data
+
+### Overview
+- ${analysis.total_prompts} prompts across ${summary.total_sessions} sessions, ${summary.unique_projects} projects
+- Date range: ${summary.date_range_start} to ${summary.date_range_end}
+- Average prompt length: ${analysis.avg_length} chars
+- Estimated API cost: $${(summary.estimated_cost || 0).toFixed(2)}
+- ${workSummary}
+
+### Prompt Categories (what they ask Claude to do)
+${catSummary}
+
+### Prompt Length Distribution
+${lenSummary}
+
+### Model Usage & Cost
+${modelText}
+
+### Subagent Usage
+${saText}
+
+### Context Window Efficiency
+${ceText}
+
+### Git Branch Activity
+${branchText}
+
+### Permission Modes
+${pmText}
+
+### Project Quality Scores (per-project prompt patterns)
+${JSON.stringify(analysis.project_quality.slice(0, 8), null, 2)}
+
+### REAL Prompts From This User (use these in before/after examples)
+${sampleText}
+
+## Expert Best Practices (from Boris Cherny, Claude Code creator)
+Reference these when the user's data shows they're missing these patterns:
+- PostToolUse hooks to auto-format code (handles the last 10% of formatting, avoids CI failures)
+- /permissions to pre-allow safe commands instead of --dangerously-skip-permissions. Check into .claude/settings.json and share with team.
+- MCP integrations for Slack, BigQuery, Sentry, etc. — Claude should use ALL your tools, not just code.
+- For long-running tasks: verify work with a background agent, or use an AgentStop hook.
+- THE #1 TIP: Give Claude a way to verify its work. If it can run tests after every change, output quality jumps 2-3x.
+- CLAUDE.md should contain: project conventions, how to run tests, what to do automatically (don't ask).
+
+## Output Format
+
+Return a JSON array of 8-10 objects. Each object:
+- "title": imperative, max 8 words, no fluff (e.g. "Stop using Opus for grep" not "Consider optimizing model selection")
+- "severity": "high" (costs real money/time NOW), "medium" (compounds over weeks), "low" (polish)
+- "body": 2-4 sentences. MUST cite specific numbers from their data. Explain what's wrong AND the concrete impact (dollars saved, minutes recovered, bugs prevented).
+- "metric": their current number | target (e.g. "72% Opus spend | target: <30%")
+- "example": Show a REAL prompt they wrote, then show the improved version. Use this format:
+  "Before: [their actual prompt]\\nAfter: [your improved version]\\nWhy: [one sentence explaining the difference]"
+  OR show a Claude Code command/config they should use.
+
+Ordering: HIGH items first, then MEDIUM, then LOW.
+
+Focus areas (skip if their data doesn't support it):
+1. Money: Are they burning cash on expensive models for simple tasks?
+2. Prompt craft: Show before/after rewrites of their weakest prompts
+3. Feature gaps: Claude Code features they're clearly not using (based on absence in data)
+4. Session hygiene: Are sessions too long? Too many compactions? Context bloat?
+5. Workflow: Could they batch, parallelize, or automate?
+6. Testing/quality: Are they debugging more than building?
+
+Return ONLY the JSON array. No markdown fences, no commentary outside the array.`;
+}
+
+/** Make an HTTPS POST request using Node's built-in https module. */
+function httpsPost(
+  url: string,
+  headers: Record<string, string>,
+  body: string
+): Promise<{ status: number; data: string }> {
+  return new Promise((resolve, reject) => {
+    const parsed = new URL(url);
+    const options: https.RequestOptions = {
+      hostname: parsed.hostname,
+      port: parsed.port || 443,
+      path: parsed.pathname,
+      method: "POST",
+      headers: {
+        ...headers,
+        "Content-Length": Buffer.byteLength(body).toString(),
+      },
+    };
+
+    const req = https.request(options, (res) => {
+      const chunks: Buffer[] = [];
+      res.on("data", (chunk: Buffer) => chunks.push(chunk));
+      res.on("end", () => {
+        resolve({
+          status: res.statusCode || 0,
+          data: Buffer.concat(chunks).toString("utf-8"),
+        });
+      });
+    });
+
+    req.on("error", reject);
+    req.write(body);
+    req.end();
+  });
+}
+
+/** Spinner that shows rotating progress phases on stdout. */
+function startSpinner(): { stop: () => void } {
+  const phases = [
+    "Analyzing prompt patterns",
+    "Evaluating model usage",
+    "Reviewing session efficiency",
+    "Checking workflow patterns",
+    "Generating personalized tips",
+  ];
+  const chars = "\u280B\u2819\u2839\u2838\u283C\u2834\u2826\u2827\u2807\u280F";
+  let i = 0;
+  const t0 = Date.now();
+  let stopped = false;
+
+  const interval = setInterval(() => {
+    if (stopped) return;
+    const elapsed = Math.floor((Date.now() - t0) / 1000);
+    const phase = phases[Math.min(Math.floor(elapsed / 10), phases.length - 1)];
+    const ch = chars[i % chars.length];
+    process.stdout.write(`\r  ${ch} ${phase}... (${elapsed}s)`);
+    i++;
+  }, 100);
+
+  return {
+    stop() {
+      stopped = true;
+      clearInterval(interval);
+      process.stdout.write("\r" + " ".repeat(60) + "\r");
+    },
+  };
+}
+
+export async function getAiRecommendations(
+  analysis: Analysis,
+  summary: DashboardSummary,
+  promptsSample: PromptEntry[],
+  workDays: WorkDay[],
+  models: ModelBreakdown[],
+  subagents: SubagentData,
+  contextEfficiency: ContextEfficiency,
+  branches: BranchEntry[],
+  skills: SkillEntry[],
+  permissionModes: Record<string, number>
+): Promise<{ recs: Recommendation[] | null; error: string | null }> {
+  const apiKey = process.env.ANTHROPIC_API_KEY;
+  if (!apiKey) {
+    return { recs: null, error: "ANTHROPIC_API_KEY not set" };
+  }
+
+  const prompt = buildAiPrompt(
+    analysis, summary, promptsSample, workDays,
+    models, subagents, contextEfficiency, branches, skills, permissionModes
+  );
+
+  const requestBody = JSON.stringify({
+    model: "claude-opus-4-6",
+    max_tokens: 4000,
+    messages: [{ role: "user", content: prompt }],
+  });
+
+  const spinner = startSpinner();
+
+  try {
+    const response = await httpsPost(
+      "https://api.anthropic.com/v1/messages",
+      {
+        "Content-Type": "application/json",
+        "x-api-key": apiKey,
+        "anthropic-version": "2023-06-01",
+      },
+      requestBody
+    );
+
+    spinner.stop();
+
+    if (response.status !== 200) {
+      const errBody = response.data;
+      let errMsg = `API returned status ${response.status}`;
+      try {
+        const parsed = JSON.parse(errBody);
+        if (parsed.error?.message) errMsg = parsed.error.message;
+      } catch {
+        // keep default error message
+      }
+      return { recs: null, error: errMsg };
+    }
+
+    const responseData = JSON.parse(response.data);
+    let text: string = responseData.content?.[0]?.text || "";
+    text = text.trim();
+
+    let recs: Recommendation[];
+    if (text.startsWith("[")) {
+      recs = JSON.parse(text);
+    } else {
+      const start = text.indexOf("[");
+      const end = text.lastIndexOf("]") + 1;
+      if (start >= 0 && end > start) {
+        recs = JSON.parse(text.substring(start, end));
+      } else {
+        return { recs: null, error: "Could not parse API response as JSON" };
+      }
+    }
+
+    return { recs, error: null };
+  } catch (e: unknown) {
+    spinner.stop();
+    const msg = e instanceof Error ? e.message : String(e);
+    return { recs: null, error: msg };
+  }
+}
+
+// ============================================================
 // Main entry point
 // ============================================================
 
-export function generateRecommendations(
+export async function generateRecommendations(
   data: ParsedData,
   useApi = true
-): RecommendationResult {
+): Promise<RecommendationResult> {
   const analysis = data.analysis;
   const summary = data.dashboard.summary;
   const workDays = data.work_days || [];
@@ -602,6 +933,7 @@ export function generateRecommendations(
   const skillList = data.skills || [];
   const pm = data.permission_modes || {};
 
+  // Always generate heuristic recs
   const heuristicRecs = getHeuristicRecommendations(
     analysis,
     summary,
@@ -615,9 +947,33 @@ export function generateRecommendations(
     pm
   );
 
-  // In the TypeScript port we only support heuristic analysis (no AI API call)
-  for (const r of heuristicRecs) {
-    r.rec_source = "heuristic";
+  if (!useApi) {
+    for (const r of heuristicRecs) {
+      r.rec_source = "heuristic";
+    }
+    return { recommendations: heuristicRecs, source: "heuristic" };
   }
-  return { recommendations: heuristicRecs, source: "heuristic" };
+
+  const { recs: aiRecs, error } = await getAiRecommendations(
+    analysis, summary, promptList.slice(0, 80), workDays,
+    modelList, sa, ce, branchList, skillList, pm
+  );
+
+  if (aiRecs) {
+    for (const r of aiRecs) {
+      r.rec_source = "ai";
+    }
+    for (const r of heuristicRecs) {
+      r.rec_source = "heuristic";
+    }
+    const merged = [...aiRecs, ...heuristicRecs];
+    console.log(`  ${aiRecs.length} AI + ${heuristicRecs.length} heuristic = ${merged.length} recommendations`);
+    return { recommendations: merged, source: "ai" };
+  } else {
+    console.log(`  AI analysis unavailable (${error}), using heuristic analysis`);
+    for (const r of heuristicRecs) {
+      r.rec_source = "heuristic";
+    }
+    return { recommendations: heuristicRecs, source: "heuristic" };
+  }
 }

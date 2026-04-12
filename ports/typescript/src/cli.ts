@@ -196,7 +196,7 @@ function openInBrowser(filepath: string): void {
 // Main
 // ============================================================
 
-function main(): void {
+async function main(): Promise<void> {
   loadEnv();
 
   const args = parseArgs(process.argv.slice(2));
@@ -284,16 +284,16 @@ function main(): void {
     useApi = false;
   }
 
-  // Step 4: Generate recommendations (heuristic only in TS port)
+  // Step 4: Generate recommendations
   if (useApi) {
-    console.log(`${ORANGE}[4/5]${RESET} Generating heuristic recommendations...`);
-    console.log("  (AI-powered analysis not available in TypeScript port, using heuristic)");
+    console.log(`${ORANGE}[4/5]${RESET} Generating AI-powered recommendations (Claude Opus)...`);
   } else {
     console.log(`${ORANGE}[4/5]${RESET} Generating heuristic recommendations...`);
   }
-  const recommendations = generateRecommendations(data, false);
+  const recommendations = await generateRecommendations(data, useApi);
   const recCount = recommendations.recommendations.length;
-  console.log(`  ${recCount} recommendations (heuristic)`);
+  const sourceLabel = recommendations.source === "ai" ? "AI + heuristic" : "heuristic";
+  console.log(`  ${recCount} recommendations (${sourceLabel})`);
 
   // Step 5: Generate report
   console.log(`${ORANGE}[5/5]${RESET} Generating report...`);
@@ -321,4 +321,7 @@ function main(): void {
   console.log("Done! Go level up your Claude game.");
 }
 
-main();
+main().catch((err) => {
+  console.error("Fatal error:", err);
+  process.exit(1);
+});

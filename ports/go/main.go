@@ -1,10 +1,13 @@
 package main
 
 import (
+	"bufio"
 	"flag"
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"strings"
 )
 
 const version = "0.1.0"
@@ -38,8 +41,44 @@ func printBanner() {
 	fmt.Println()
 }
 
-func openInBrowser(filepath string) {
-	cmd := exec.Command("open", filepath)
+func loadEnvFile() {
+	// Try .env in current directory, then home directory
+	paths := []string{".env"}
+	if home, err := os.UserHomeDir(); err == nil {
+		paths = append(paths, filepath.Join(home, ".env"))
+	}
+	for _, p := range paths {
+		f, err := os.Open(p)
+		if err != nil {
+			continue
+		}
+		scanner := bufio.NewScanner(f)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line == "" || strings.HasPrefix(line, "#") {
+				continue
+			}
+			parts := strings.SplitN(line, "=", 2)
+			if len(parts) != 2 {
+				continue
+			}
+			key := strings.TrimSpace(parts[0])
+			val := strings.TrimSpace(parts[1])
+			// Strip surrounding quotes
+			if len(val) >= 2 && ((val[0] == '"' && val[len(val)-1] == '"') || (val[0] == '\'' && val[len(val)-1] == '\'')) {
+				val = val[1 : len(val)-1]
+			}
+			// Only set if not already in environment
+			if os.Getenv(key) == "" {
+				os.Setenv(key, val)
+			}
+		}
+		f.Close()
+	}
+}
+
+func openInBrowser(fpath string) {
+	cmd := exec.Command("open", fpath)
 	cmd.Run()
 }
 
@@ -59,7 +98,10 @@ func main() {
 		os.Exit(0)
 	}
 
-	_ = noAPI // In Go port, we only do heuristic analysis
+	// Load .env for ANTHROPIC_API_KEY
+	loadEnvFile()
+
+	useAPI := !*noAPI && os.Getenv("ANTHROPIC_API_KEY") != ""
 
 	printBanner()
 
@@ -120,15 +162,27 @@ func main() {
 	}
 	fmt.Printf("  Timezone: %s\n", summary.TzLabel)
 
-	// Step 3: Heuristic analysis
+	// Step 3: Analyze
 	fmt.Printf("%s[3/5]%s Analyzing prompt patterns...\n", orange, reset)
-	fmt.Println("  Using heuristic analysis (Go port, --no-api implied)")
+	if useAPI {
+		fmt.Println("  API key found - will use AI-powered analysis")
+	} else {
+		if *noAPI {
+			fmt.Println("  Using heuristic analysis (--no-api)")
+		} else {
+			fmt.Println("  No ANTHROPIC_API_KEY found, using heuristic analysis")
+		}
+	}
 
 	// Step 4: Generate recommendations
-	fmt.Printf("%s[4/5]%s Generating heuristic recommendations...\n", orange, reset)
-	recommendations := GenerateRecommendations(data)
+	if useAPI {
+		fmt.Printf("%s[4/5]%s Generating AI-powered recommendations...\n", orange, reset)
+	} else {
+		fmt.Printf("%s[4/5]%s Generating heuristic recommendations...\n", orange, reset)
+	}
+	recommendations := GenerateRecommendations(data, useAPI)
 	recCount := len(recommendations.Recommendations)
-	fmt.Printf("  %d recommendations (heuristic)\n", recCount)
+	fmt.Printf("  %d recommendations (%s)\n", recCount, recommendations.Source)
 
 	// Step 5: Generate report
 	fmt.Printf("%s[5/5]%s Generating report...\n", orange, reset)
