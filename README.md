@@ -8,9 +8,11 @@ Combines AI-powered analysis (Claude Opus) with pattern-based heuristics to coac
 
 ## Quick Start
 
+The primary implementation is Python. TypeScript, Go, and Rust ports are also available.
+
 ```bash
 git clone https://github.com/brianleach/claude-analytics.git
-cd claude-analytics
+cd claude-analytics/ports/python
 pip install -e ".[ai]"
 ```
 
@@ -20,7 +22,7 @@ Add your Anthropic API key for the best results (AI-powered recommendations via 
 # Option 1: export directly
 export ANTHROPIC_API_KEY=sk-ant-...
 
-# Option 2: create a .env file (see .env.example)
+# Option 2: create a .env file in ports/python/ (see .env.example)
 echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
 ```
 
@@ -31,6 +33,61 @@ claude-analytics
 ```
 
 The report generates from your local `~/.claude/` data and opens in your browser. If no API key is set, it still works — you'll get pattern-based recommendations instead of AI-powered ones.
+
+## Ports
+
+The tool is implemented in four languages. All ports produce the same interactive HTML report.
+
+```
+ports/
+  python/       ← primary, full features including AI recommendations
+  typescript/   ← full port, heuristic recommendations only
+  go/           ← full port, heuristic recommendations only
+  rust/         ← full port, heuristic recommendations only
+```
+
+### Running each port
+
+**Python** (recommended — includes AI-powered analysis):
+```bash
+cd ports/python
+pip install -e ".[ai]"
+claude-analytics
+```
+
+**TypeScript**:
+```bash
+cd ports/typescript
+npm install
+npx ts-node src/cli.ts
+```
+
+**Go**:
+```bash
+cd ports/go
+go build -o claude-analytics .
+./claude-analytics
+```
+
+**Rust**:
+```bash
+cd ports/rust
+cargo build --release
+./target/release/claude-analytics
+```
+
+### Benchmarks
+
+Run `./benchmark.sh` from the repo root to race all four implementations against your data:
+
+```
+TypeScript:  0.72s
+Python:      0.83s
+Go:          0.95s
+Rust:        1.14s
+```
+
+All under 1 second for ~300MB of session data across 360 JSONL files. The AI recommendation step (Python only) adds ~45 seconds for the Opus API call.
 
 ## What You Get
 
@@ -79,16 +136,6 @@ claude-analytics [OPTIONS]
   --version         Show version
 ```
 
-Output:
-
-```
-[1/5] Locating Claude data...
-[2/5] Parsing sessions...
-[3/5] Analyzing prompt patterns...
-[4/5] Generating AI-powered recommendations (Claude Opus)...
-[5/5] Generating report...
-```
-
 ## Privacy & Security
 
 - **Local by default**: all parsing, chart rendering, and pattern-based recommendations run entirely on your machine
@@ -102,12 +149,6 @@ Output:
 2. **Analyze** -- categorizes prompts by intent, measures quality, calculates working patterns, detects best practices gaps
 3. **Recommend** -- dual system: Claude Opus API generates personalized coaching with real prompt rewrites (optional), pattern-based heuristics always run and detect anti-patterns like missing hooks, low test coverage, and model overuse
 4. **Render** -- injects everything into a self-contained HTML dashboard and opens it in your browser
-
-## Requirements
-
-- Python 3.8+
-- Claude Code installed and used (needs `~/.claude/projects/` data)
-- `anthropic` Python package (optional, included with `pip install -e ".[ai]"`)
 
 ## License
 

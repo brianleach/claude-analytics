@@ -10,8 +10,12 @@ build/
 .venv
 env/
 venv/
-claude-analytics-report.html
 .DS_Store
+node_modules/
+target/
 
 # Claude Analytics reports (contain sensitive data)
 output/
+ports/go/claude-analytics
+ports/rust/target/
+ports/typescript/dist/

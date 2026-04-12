@@ -1,0 +1,20 @@
+{
+  "name": "claude-analytics",
+  "version": "0.1.0",
+  "description": "Analyze your Claude Code usage and level up your prompting.",
+  "main": "dist/cli.js",
+  "bin": {
+    "claude-analytics": "dist/cli.js"
+  },
+  "scripts": {
+    "build": "tsc",
+    "start": "ts-node src/cli.ts",
+    "dev": "ts-node src/cli.ts"
+  },
+  "devDependencies": {
+    "typescript": "^5.4.0",
+    "ts-node": "^10.9.0",
+    "@types/node": "^20.0.0"
+  },
+  "license": "MIT"
+}
