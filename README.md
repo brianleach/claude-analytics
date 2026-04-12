@@ -1,63 +1,68 @@
 # claude-analytics
 
-A CLI tool that parses your local `~/.claude/` session data and generates an interactive HTML report with personalized recommendations. It combines AI-powered analysis (via Claude Opus) with pattern-based heuristics to help you write better prompts and understand your Claude Code usage.
+A CLI tool that parses your local `~/.claude/` session data and generates an interactive HTML report with personalized recommendations to help you get more out of Claude Code.
 
-![Terminal retro dashboard](https://img.shields.io/badge/style-terminal_retro-33ff88?style=flat-square&labelColor=0a0a0a) ![Python 3.8+](https://img.shields.io/badge/python-3.8+-44ddff?style=flat-square&labelColor=0a0a0a) ![License MIT](https://img.shields.io/badge/license-MIT-ffaa33?style=flat-square&labelColor=0a0a0a)
+Combines AI-powered analysis (Claude Opus) with pattern-based heuristics to coach you on prompt quality, model selection, workflow efficiency, and Claude Code features you might be missing.
+
+![Python 3.8+](https://img.shields.io/badge/python-3.8+-44ddff?style=flat-square&labelColor=0a0a0a) ![License MIT](https://img.shields.io/badge/license-MIT-ffaa33?style=flat-square&labelColor=0a0a0a)
+
+## Quick Start
+
+```bash
+git clone https://github.com/brianleach/claude-analytics.git
+cd claude-analytics
+pip install -e ".[ai]"
+```
+
+Add your Anthropic API key for the best results (AI-powered recommendations via Claude Opus, ~$0.15-0.25 per run):
+
+```bash
+# Option 1: export directly
+export ANTHROPIC_API_KEY=sk-ant-...
+
+# Option 2: create a .env file (see .env.example)
+echo "ANTHROPIC_API_KEY=sk-ant-..." > .env
+```
+
+Then run:
+
+```bash
+claude-analytics
+```
+
+The report generates from your local `~/.claude/` data and opens in your browser. If no API key is set, it still works — you'll get pattern-based recommendations instead of AI-powered ones.
 
 ## What You Get
 
 **A recommendations engine**, not just charts. The report leads with actionable coaching based on your actual prompt patterns, then backs it up with detailed usage data.
 
-- **AI-powered recommendations** -- Claude Opus analyzes up to 80 prompt excerpts and generates specific, personalized coaching with copy-ready example prompts
-- **Pattern-based recommendations** -- heuristic analysis runs alongside (or instead of) AI, detecting short prompts, missing context, debugging patterns, and more
-- **Cost estimation** -- per-model breakdown (Opus, Sonnet, Haiku) with cache read/write tracking and reduction tips
-- **Model usage** -- clickable doughnut charts showing model distribution across sessions
-- **Subagent analysis** -- subagent types, compaction events, and context window efficiency metrics
-- **Git branch correlation** -- session activity mapped to branches and projects
-- **Skill and slash command tracking** -- frequency and usage patterns for Claude Code skills
-- **MCP integration usage** -- which MCP tools are being called and how often
-- **Permission mode tracking** -- breakdown of permission modes used across sessions
-- **Working hours estimate** -- daily active hours, span, and weekly totals with clickable day cards
-- **11 prompt analysis and trend charts** -- daily activity, weekly heatmap, category breakdown, length distribution, per-project quality scores, and more (lazy-rendered for performance)
-- **Interactive drill-down** -- click a chart to see sessions, click a session to read individual prompts with timestamps and categories
-- **Boris Cherny best practices detection** -- checks for hooks, verification patterns, and permission configuration
+### Recommendations
 
-Everything runs locally. Your prompts never leave your machine unless you opt into AI recommendations (see Privacy & Security below).
+- **AI-powered recommendations** -- Claude Opus analyzes your prompt samples and generates specific, personalized coaching with before/after rewrites of your actual prompts
+- **Pattern-based recommendations** -- heuristic rules detect anti-patterns: short prompts, excessive debugging, missing tests, underused subagents, missing PostToolUse hooks, and more (inspired by [Boris Cherny's Claude Code tips](https://x.com/bcherny))
+- **Both run every time** -- AI tips are labeled "AI generated", pattern tips are labeled "pattern match", displayed in separate sections
 
-## Quick Start
+### Dashboard
 
-```bash
-# Clone the repo
-git clone https://github.com/brianleach/claude-analytics.git
-cd claude-analytics
+- **Rank badge** -- scored across 20 criteria (Beginner, Intermediate, Advanced, Master, Grand Master)
+- **Daily activity chart** -- click bars to drill into sessions for that day
+- **Weekly rhythm heatmap** -- spot your peak hours and dead zones
+- **Work day cards** -- clickable cards showing active hours, span, and prompt count per day
 
-# Install (basic -- no external dependencies)
-pip install -e .
+### Deep Dive
 
-# Install with AI recommendations support
-pip install -e ".[ai]"
+- **Cost estimation** -- per-model breakdown (Opus, Sonnet, Haiku) with cache read/write tracking, cost drivers, and reduction tips
+- **Model usage** -- clickable doughnut charts for messages, tokens, and cost by model
+- **Subagent analysis** -- types, compaction events, context window efficiency (tool output vs conversation tokens)
+- **Git branch correlation** -- session activity mapped to branches
+- **Skill tracking** -- slash command and MCP integration usage
+- **Permission modes** -- breakdown of auto, acceptEdits, and default modes
+- **Configuration audit** -- plugins and feature flags from .claude.json
 
-# Run (auto-opens in browser)
-claude-analytics
-```
+### Charts
 
-That's it. The report generates from your local `~/.claude/` data and opens in your browser.
-
-## Configuration
-
-For AI-powered recommendations, set your Anthropic API key. You can either export it directly:
-
-```bash
-export ANTHROPIC_API_KEY=sk-ant-...
-```
-
-Or create a `.env` file in the project directory (see `.env.example`):
-
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-If you already use Claude Code, the key is likely in your shell environment.
+- **11 prompt analysis and trend charts** -- categories, length distribution, per-project quality scores, hourly patterns, session lengths, week-over-week trends, output volume (lazy-rendered)
+- **Interactive drill-down** -- click chart -> sessions -> individual prompts with timestamps and categories
 
 ## CLI Options
 
@@ -69,11 +74,12 @@ claude-analytics [OPTIONS]
   -o, --output      Output path (default: ./output/claude-analytics-TIMESTAMP.html)
   --claude-dir      Path to .claude directory (default: ~/.claude)
   --tz-offset       Timezone offset from UTC in hours (auto-detected)
-  --since DATE      Only include data since DATE (YYYY-MM-DD), or 'last' for since last run
+  --since DATE      Only include data since DATE (YYYY-MM-DD), or 'last'
+                    for since last run
   --version         Show version
 ```
 
-The CLI runs in five steps:
+Output:
 
 ```
 [1/5] Locating Claude data...
@@ -85,23 +91,23 @@ The CLI runs in five steps:
 
 ## Privacy & Security
 
-- **Stays local**: all parsing, analysis, chart rendering, and heuristic recommendations run entirely on your machine
-- **AI recommendations (opt-in)**: when enabled, sends up to 80 prompt excerpts (each truncated to 300 characters) plus aggregated usage statistics to the Anthropic API -- no full prompts or file contents are sent
-- **Output is double-gitignored**: the `output/` directory and legacy `claude-analytics-report.html` path are both listed in `.gitignore` to prevent accidental commits of reports containing your prompt data
-- **No telemetry**: nothing is uploaded, tracked, or shared beyond the optional API call above
+- **Local by default**: all parsing, chart rendering, and pattern-based recommendations run entirely on your machine
+- **AI recommendations (opt-in)**: sends up to 80 prompt excerpts (each truncated to 300 characters) plus aggregated usage statistics to the Anthropic API. No full prompts, file contents, or code are sent
+- **Reports are double-gitignored**: `output/` is in both root `.gitignore` and has its own internal `.gitignore` to prevent accidental commits of session data
+- **No telemetry**: nothing is uploaded, tracked, or shared beyond the optional API call
 
 ## How It Works
 
-1. **Parse** -- reads JSONL session files from `~/.claude/projects/`, extracts messages, timestamps, tool usage, token counts, model info, subagent data, and MCP calls
-2. **Analyze** -- categorizes prompts (debugging, building, testing, etc.), measures prompt quality, calculates working patterns, detects best practices
-3. **Recommend** -- generates personalized tips using a dual system: Claude Opus API for deep analysis (optional) and pattern-based heuristics that always run, referencing your specific numbers and real prompt examples
-4. **Render** -- injects everything into a self-contained interactive HTML dashboard with lazy-rendered charts and opens it in your browser
+1. **Parse** -- reads JSONL session files from `~/.claude/projects/`, extracts messages, timestamps, tool usage, token counts, model info, subagent data, permission modes, and MCP calls
+2. **Analyze** -- categorizes prompts by intent, measures quality, calculates working patterns, detects best practices gaps
+3. **Recommend** -- dual system: Claude Opus API generates personalized coaching with real prompt rewrites (optional), pattern-based heuristics always run and detect anti-patterns like missing hooks, low test coverage, and model overuse
+4. **Render** -- injects everything into a self-contained HTML dashboard and opens it in your browser
 
 ## Requirements
 
 - Python 3.8+
 - Claude Code installed and used (needs `~/.claude/projects/` data)
-- `anthropic` Python package (optional, for AI recommendations -- install with `pip install -e ".[ai]"`)
+- `anthropic` Python package (optional, included with `pip install -e ".[ai]"`)
 
 ## License
 
