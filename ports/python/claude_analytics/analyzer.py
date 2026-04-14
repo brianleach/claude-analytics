@@ -4,9 +4,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 import threading
 import time
+from pathlib import Path
 
 
 def find_example_prompts(prompts: list[dict], category: str, max_count: int = 3, max_len: int = 150) -> list[str]:
@@ -27,6 +29,55 @@ def find_short_prompts(prompts: list[dict], max_chars: int = 50, max_count: int 
     return [p["text"][:80] for p in short]
 
 
+_RULES_CACHE: list[dict] | None = None
+
+
+def _load_rules() -> list[dict]:
+    """Load heuristic rules from shared JSON (cached after first load)."""
+    global _RULES_CACHE
+    if _RULES_CACHE is not None:
+        return _RULES_CACHE
+    rules_path = Path(__file__).resolve().parent.parent.parent.parent / "shared" / "heuristic_rules.json"
+    with open(rules_path) as f:
+        _RULES_CACHE = json.load(f)
+    return _RULES_CACHE
+
+
+def _render_template(template: str, values: dict) -> str:
+    """Render a template string with {{variable}} and {{variable:.0f}} placeholders."""
+    def replacer(m):
+        key = m.group(1)
+        fmt = m.group(2) or ""
+        val = values.get(key, "")
+        if fmt:
+            try:
+                return f"{val:{fmt}}"
+            except (ValueError, TypeError):
+                return str(val)
+        return str(val)
+    return re.sub(r"\{\{(\w+)(?::([^}]+))?\}\}", replacer, template)
+
+
+def _check_condition(cond: dict, values: dict) -> bool:
+    """Check a simple condition {metric, operator, threshold} against values."""
+    metric_val = values.get(cond["metric"], 0)
+    op = cond["operator"]
+    # threshold can be a number or a reference to another metric
+    if "threshold_metric" in cond:
+        threshold = values.get(cond["threshold_metric"], 0)
+    else:
+        threshold = cond["threshold"]
+    if op == ">":
+        return metric_val > threshold
+    elif op == "<":
+        return metric_val < threshold
+    elif op == ">=":
+        return metric_val >= threshold
+    elif op == "<=":
+        return metric_val <= threshold
+    return False
+
+
 def get_heuristic_recommendations(
     analysis: dict,
     summary: dict,
@@ -39,10 +90,8 @@ def get_heuristic_recommendations(
     skills: list[dict] | None = None,
     permission_modes: dict | None = None,
 ) -> list[dict]:
-    """Generate recommendations using local heuristics (no API needed).
-
-    Now uses actual prompt examples and expanded data for richer tips.
-    """
+    """Generate recommendations using shared heuristic rules (no API needed)."""
+    rules = _load_rules()
     recs = []
     total = analysis["total_prompts"]
     avg_len = analysis["avg_length"]
@@ -52,6 +101,7 @@ def get_heuristic_recommendations(
     context_efficiency = context_efficiency or {}
     branches = branches or []
     skills = skills or []
+    permission_modes = permission_modes or {}
 
     cat_map = {c["cat"]: c for c in analysis["categories"]}
     lb_map = {l["bucket"]: l for l in analysis["length_buckets"]}
@@ -64,485 +114,145 @@ def get_heuristic_recommendations(
     q_pct = cat_map.get("question", {}).get("pct", 0)
     build_pct = cat_map.get("building", {}).get("pct", 0)
     confirm_pct = cat_map.get("confirmation", {}).get("pct", 0)
-    edit_pct = cat_map.get("editing", {}).get("pct", 0)
 
-    # ──────────────────────────────────────────────
-    # PROMPTING RECOMMENDATIONS
-    # ──────────────────────────────────────────────
-
-    # 1. Prompt specificity — with real examples
-    if micro_pct + short_pct > 25:
-        short_examples = find_short_prompts(prompts)
-        example_block = ""
-        if short_examples:
-            example_block = "Your short prompts include:\n"
-            for ex in short_examples[:3]:
-                example_block += f'  > "{ex}"\n'
-            example_block += "\nTry instead:\n"
-            example_block += (
-                '"Fix the login form in src/auth/LoginForm.tsx — it shows a blank '
-                'screen after submitting valid credentials. The handleSubmit callback '
-                'should redirect to /dashboard but router.push isn\'t firing."'
-            )
-        # Acknowledge bimodal distribution when avg is high
-        if avg_len > 200:
-            body_text = (
-                f"{micro_pct + short_pct:.0f}% of your prompts are under 50 characters "
-                f"(though your avg is {avg_len} chars — a bimodal pattern). "
-                "Those short prompts are often confirmations or follow-ups that "
-                "force extra round-trips. Try batching context into fewer, richer prompts."
-            )
-            severity = "medium"
-        else:
-            body_text = (
-                f"{micro_pct + short_pct:.0f}% of your prompts are under 50 characters. "
-                "Short prompts force Claude to guess, burning tokens on clarification. "
-                "Include: file path, expected vs actual behavior, and constraints. "
-                "A specific 100-char prompt saves 5 rounds of back-and-forth."
-            )
-            severity = "high"
-        recs.append({
-            "title": "Front-load context in your prompts",
-            "severity": severity,
-            "body": body_text,
-            "metric": f"your avg: {avg_len} chars | {micro_pct + short_pct:.0f}% under 50 chars",
-            "example": example_block or (
-                'Instead of "fix the bug", try:\n'
-                '"Fix the login form in src/auth/LoginForm.tsx — blank screen after '
-                'submit. handleSubmit should redirect to /dashboard."'
-            ),
-        })
-
-    # 2. High confirmation ratio — you're just saying "yes" a lot
-    if confirm_pct > 15:
-        confirm_examples = find_example_prompts(prompts, "confirmation")
-        example_block = ""
-        if confirm_examples:
-            example_block = "Your confirmation prompts include:\n"
-            for ex in confirm_examples[:3]:
-                example_block += f'  > "{ex}"\n'
-            example_block += "\nEliminate these by adding to CLAUDE.md:\n"
-            example_block += (
-                "- Auto-fix lint errors without asking\n"
-                "- Run tests after every code change\n"
-                "- Commit with descriptive messages, don't ask for approval"
-            )
-        recs.append({
-            "title": "Reduce confirmation ping-pong",
-            "severity": "medium",
-            "body": (
-                f"{confirm_pct}% of your prompts are confirmations (yes, ok, go ahead, etc). "
-                "This suggests Claude is asking for permission too often. Set up a "
-                "CLAUDE.md with your conventions so Claude can act autonomously, and "
-                "use permission mode flags to reduce approval prompts."
-            ),
-            "metric": f"{confirm_pct}% confirmations | target: <10%",
-            "example": example_block or (
-                "Add to CLAUDE.md:\n"
-                "- Auto-fix lint errors without asking\n"
-                "- Run tests after every code change\n"
-                "- Commit with descriptive messages, don't ask for approval"
-            ),
-        })
-
-    # 3. Debug ratio — with real debugging prompts
-    if debug_pct > 12:
-        debug_examples = find_example_prompts(prompts, "debugging")
-        example_block = ""
-        if debug_examples:
-            example_block = "Your debugging prompts:\n"
-            for ex in debug_examples[:2]:
-                example_block += f'  > "{ex}"\n'
-            example_block += "\nLevel up by including:\n"
-            example_block += "- The full error message and stack trace\n"
-            example_block += "- What you expected vs what happened\n"
-            example_block += "- Steps to reproduce"
-        recs.append({
-            "title": "Reduce debugging cycles",
-            "severity": "high" if debug_pct > 20 else "medium",
-            "body": (
-                f"{debug_pct}% of your prompts are debugging. Reduce this by: "
-                "1) pasting full error messages + stack traces upfront, "
-                "2) asking Claude to add error handling proactively when building, "
-                "3) requesting defensive coding patterns like input validation."
-            ),
-            "metric": f"{debug_pct}% debugging | target: <10%",
-            "example": example_block or (
-                '"Fix the crash in PaymentService.processOrder() — here\'s the stack '
-                'trace: [paste]. It fails when the cart has items with quantity > 99."'
-            ),
-        })
-
-    # 4. Testing
-    if test_pct < 5:
-        recs.append({
-            "title": "Ask for tests alongside features",
-            "severity": "medium",
-            "body": (
-                f"Only {test_pct}% of prompts mention testing. "
-                "Bundling test requests with feature work catches regressions early "
-                "and forces Claude to think about edge cases during implementation. "
-                "This is one of Claude's strongest capabilities — use it."
-            ),
-            "metric": f"{test_pct}% testing | recommended: 10-15%",
-            "example": (
-                '"Implement the user search endpoint and write tests covering: '
-                'empty query, special characters, pagination boundaries, and a '
-                'user with no matching results."'
-            ),
-        })
-
-    # 5. Questions — thinking before building
-    if q_pct < 8:
-        recs.append({
-            "title": "Use Claude as a thinking partner first",
-            "severity": "medium",
-            "body": (
-                f"Only {q_pct}% of your prompts are questions. "
-                "Before diving into implementation, spend 30 seconds asking Claude "
-                "to explain tradeoffs, review your approach, or suggest architecture. "
-                "A quick question prevents expensive wrong turns."
-            ),
-            "metric": f"{q_pct}% questions | consider: 10-15%",
-            "example": (
-                '"Before I implement caching, walk me through the tradeoffs between '
-                'Redis and in-memory for our case. We have ~1000 req/min and data '
-                'changes every 5 minutes. What would you recommend?"'
-            ),
-        })
-
-    # 6. Refactoring
-    if ref_pct < 3:
-        recs.append({
-            "title": "Schedule refactoring passes",
-            "severity": "low",
-            "body": (
-                f"Only {ref_pct}% of prompts involve refactoring. "
-                "After features ship, ask Claude to clean up. It excels at "
-                "mechanical refactoring — extracting shared utils, simplifying "
-                "complex functions, improving naming, reducing duplication."
-            ),
-            "metric": f"{ref_pct}% refactoring | healthy: 5-10%",
-            "example": (
-                '"Review src/api/ for duplicated logic across endpoints. '
-                'Extract shared patterns into middleware or utility functions. '
-                'Don\'t change behavior, just clean up the structure."'
-            ),
-        })
-
-    # ──────────────────────────────────────────────
-    # SESSION & WORKFLOW RECOMMENDATIONS
-    # ──────────────────────────────────────────────
-
-    # 7. Batching (high messages per session)
+    # Computed metrics
     avg_msgs = summary["total_user_msgs"] / max(summary["total_sessions"], 1)
-    if avg_msgs > 100:
-        recs.append({
-            "title": "Batch related changes into single prompts",
-            "severity": "medium",
-            "body": (
-                f"You average {avg_msgs:.0f} messages per session. "
-                "Try combining related changes: instead of 5 separate prompts "
-                "for 5 files, list all changes in one. Claude handles multi-file "
-                "changes well and produces more coherent diffs."
-            ),
-            "metric": f"{avg_msgs:.0f} msgs/session avg",
-            "example": (
-                '"Rename userService to authService across the codebase: '
-                '1) rename the file, 2) update all imports, '
-                '3) update tests, 4) update config references."'
-            ),
-        })
+    total_sessions = summary["total_sessions"]
 
-    # 8. CLAUDE.md — only suggest if confirmation rate is high (suggests repeated setup)
-    if confirm_pct > 10 or micro_pct > 15:
-        recs.append({
-            "title": "Use CLAUDE.md for persistent context",
-            "severity": "low",
-            "body": (
-                "Put project conventions, file structure, and recurring instructions "
-                "in a CLAUDE.md file in your project root. Claude reads it at session "
-                "start, so you never have to repeat setup instructions. This single "
-                "file can eliminate dozens of wasted prompts per session."
-            ),
-            "metric": f"{summary['total_sessions']} sessions could each save setup prompts",
-            "example": (
-                "# CLAUDE.md\n"
-                "- React Native app using Expo + TypeScript strict\n"
-                "- Run tests: npx jest --watchAll=false\n"
-                "- Always use functional components with hooks\n"
-                "- API config in src/config/api.ts\n"
-                "- Don't ask before running tests or fixing lint"
-            ),
-        })
-
-    # ──────────────────────────────────────────────
-    # MODEL & COST RECOMMENDATIONS
-    # ──────────────────────────────────────────────
-
-    # 9. Model selection
+    opus_pct = 0
     if models:
         opus_model = next((m for m in models if m["display"] == "Opus"), None)
-        haiku_model = next((m for m in models if m["display"] == "Haiku"), None)
         total_cost = summary.get("estimated_cost", 0)
-
         if opus_model and total_cost > 0:
             opus_pct = round(opus_model["estimated_cost"] / total_cost * 100)
-            if opus_pct > 70:
-                recs.append({
-                    "title": "Use lighter models for routine tasks",
-                    "severity": "high" if opus_pct > 85 else "medium",
-                    "body": (
-                        f"Opus accounts for {opus_pct}% of your estimated API cost. "
-                        "For routine tasks like file searches, simple edits, code formatting, "
-                        "and grep operations, Sonnet or Haiku are 5-20x cheaper and just as "
-                        "effective. Reserve Opus for complex reasoning and architecture."
-                    ),
-                    "metric": f"Opus: {opus_pct}% of spend | Haiku is 19x cheaper per token",
-                    "example": (
-                        "Use Claude Code's model selection:\n"
-                        "- /model haiku  → quick lookups, file searches, simple fixes\n"
-                        "- /model sonnet → standard coding, refactoring, tests\n"
-                        "- /model opus   → complex architecture, debugging hard issues"
-                    ),
-                })
 
-    # ──────────────────────────────────────────────
-    # SUBAGENT & TOOL RECOMMENDATIONS
-    # ──────────────────────────────────────────────
-
-    # 10. Subagent usage
     sa_count = subagents.get("total_count", 0)
     sa_types = subagents.get("type_counts", {})
     explore_count = sa_types.get("Explore", 0)
     gp_count = sa_types.get("general-purpose", 0)
-
-    if sa_count > 0:
-        if gp_count > explore_count and gp_count > 20:
-            recs.append({
-                "title": "Prefer Explore agents over general-purpose",
-                "severity": "medium",
-                "body": (
-                    f"You spawned {gp_count} general-purpose agents vs {explore_count} Explore agents. "
-                    "Explore agents use Haiku (much cheaper) and are optimized for "
-                    "code search, file discovery, and quick lookups. Use general-purpose "
-                    "only when the subagent needs to write code or make complex decisions."
-                ),
-                "metric": f"{gp_count} general-purpose | {explore_count} Explore agents",
-                "example": (
-                    "Claude automatically picks agent types, but you can influence it:\n"
-                    "- 'find all files that import UserService' → Explore agent\n"
-                    "- 'search for how auth is implemented' → Explore agent\n"
-                    "- 'refactor the auth module' → general-purpose agent"
-                ),
-            })
-        elif sa_count < 10 and summary["total_sessions"] > 20:
-            recs.append({
-                "title": "Let Claude use subagents for parallel work",
-                "severity": "low",
-                "body": (
-                    f"You've only spawned {sa_count} subagents across {summary['total_sessions']} sessions. "
-                    "Subagents let Claude search code, explore files, and run tasks in "
-                    "parallel. For complex tasks, explicitly ask Claude to 'search in parallel' "
-                    "or 'explore multiple approaches' to unlock this."
-                ),
-                "metric": f"{sa_count} subagents across {summary['total_sessions']} sessions",
-                "example": (
-                    '"Find all API endpoints that don\'t have authentication middleware '
-                    'and search for any tests that cover unauthenticated access — do both '
-                    'searches in parallel."'
-                ),
-            })
-
-    # 11. Compaction events
     compaction_count = subagents.get("compaction_count", 0)
-    if compaction_count > 3:
-        recs.append({
-            "title": "Start fresh sessions more often",
-            "severity": "high" if compaction_count > 10 else "medium",
-            "body": (
-                f"Your sessions triggered {compaction_count} context compactions — "
-                "meaning Claude's context window filled up and had to be summarized. "
-                "After compaction, Claude loses nuance from earlier in the conversation. "
-                "Start new sessions when switching tasks or after major milestones."
-            ),
-            "metric": f"{compaction_count} compactions | each loses context detail",
-            "example": (
-                "Good session boundaries:\n"
-                "- After completing a feature → new session for the next one\n"
-                "- After a successful deploy → new session for bug fixes\n"
-                "- When switching projects → always start fresh"
-            ),
-        })
 
-    # 12. Context efficiency
     tool_pct = context_efficiency.get("tool_pct", 0)
-    if tool_pct > 85:
-        recs.append({
-            "title": "Reduce context window bloat from tool output",
-            "severity": "medium",
-            "body": (
-                f"{tool_pct}% of Claude's output goes to tool results (file reads, "
-                "command output, search results). This fills the context window fast. "
-                "Use targeted file reads (specific line ranges), limit grep results, "
-                "and ask Claude to search for specific patterns rather than reading entire files."
-            ),
-            "metric": f"{tool_pct}% tool output | {context_efficiency.get('conversation_pct', 0)}% conversation",
-            "example": (
-                "Instead of: 'read the entire auth module'\n"
-                "Try: 'read the handleLogin function in src/auth/login.ts (around line 45-80)'\n\n"
-                "Instead of: 'search for all uses of UserContext'\n"
-                "Try: 'find where UserContext.Provider is rendered (should be in App.tsx)'"
-            ),
-        })
-
-    # 13. Thinking blocks
+    conversation_pct = context_efficiency.get("conversation_pct", 0)
     thinking = context_efficiency.get("thinking_blocks", 0)
-    if thinking > 0 and total > 0:
-        thinking_per_session = thinking / max(summary["total_sessions"], 1)
-        if thinking_per_session > 15:
-            recs.append({
-                "title": "Extended thinking is being used heavily",
-                "severity": "low",
-                "body": (
-                    f"Claude used extended thinking {thinking} times across your sessions "
-                    f"(~{thinking_per_session:.0f}/session). This is great for complex problems "
-                    "but uses more tokens. For simple tasks, you can nudge Claude to act "
-                    "directly: 'just do it, no need to overthink this.'"
-                ),
-                "metric": f"{thinking} thinking blocks | {thinking_per_session:.0f}/session",
-                "example": (
-                    "Thinking is valuable for:\n"
-                    "- Debugging complex race conditions\n"
-                    "- Designing system architecture\n"
-                    "- Multi-file refactoring plans\n\n"
-                    "Skip it for: simple renames, formatting, straightforward edits"
-                ),
-            })
+    thinking_per_session = thinking / max(total_sessions, 1)
 
-    # 14. MCP/skill usage
-    if skills:
-        top_skill = skills[0]["skill"] if skills else None
-        skill_count = len(skills)
-        if skill_count < 3:
-            recs.append({
-                "title": "Explore more MCP integrations",
-                "severity": "low",
-                "body": (
-                    f"You're using {skill_count} MCP tool(s). Claude Code supports "
-                    "integrations with Linear, GitHub, Sentry, Figma, Slack, and many more. "
-                    "MCP tools let Claude take actions directly in your tools — creating "
-                    "tickets, fetching error reports, reading designs — without leaving the terminal."
-                ),
-                "metric": f"{skill_count} MCP integrations active",
-                "example": (
-                    "Popular MCP integrations:\n"
-                    "- Linear: create/update tickets from code context\n"
-                    "- Sentry: fetch error details for debugging\n"
-                    "- Figma: read designs for implementation\n"
-                    "- GitHub: manage PRs and issues"
-                ),
-            })
+    skill_count = len(skills)
 
-    # ──────────────────────────────────────────────
-    # BORIS CHERNY BEST PRACTICES
-    # (inspired by the Claude Code creator's workflow tips)
-    # ──────────────────────────────────────────────
-
-    permission_modes = permission_modes or {}
-
-    # 15. Verification feedback loop — the #1 tip from Boris
-    if build_pct > 10 and test_pct < 5:
-        recs.append({
-            "title": "Give Claude a way to verify its work",
-            "severity": "high",
-            "body": (
-                f"You're building {build_pct}% of the time but only testing {test_pct}%. "
-                "The single most impactful Claude Code habit: give it a feedback loop. "
-                "When Claude can run tests after every change, output quality jumps 2-3x. "
-                "Add test commands to CLAUDE.md so Claude runs them automatically."
-            ),
-            "metric": f"{build_pct}% building | {test_pct}% testing | recommended: test every change",
-            "example": (
-                "Add to CLAUDE.md:\n"
-                "- After ANY code change, run: npm test -- --related\n"
-                "- After UI changes, run: npx playwright test\n"
-                "- Before committing, run: npm run lint && npm run typecheck\n\n"
-                "Or use a PostToolUse hook in .claude/settings.json to auto-format/test."
-            ),
-        })
-
-    # 16. Permission mode — prefer /permissions over dangerously-skip
-    default_pct = permission_modes.get("default", 0)
-    auto_pct = permission_modes.get("auto", 0)
+    default_pm = permission_modes.get("default", 0)
     total_pm = sum(permission_modes.values()) or 1
-    if default_pct / total_pm > 0.5:
-        recs.append({
-            "title": "Use /permissions instead of clicking allow",
-            "severity": "medium",
-            "body": (
-                f"{default_pct / total_pm * 100:.0f}% of your messages are in default permission mode. "
-                "You're likely clicking 'allow' repeatedly for safe commands. Use /permissions "
-                "to pre-approve safe commands (git, npm test, lint) and check them into "
-                ".claude/settings.json to share with your team."
-            ),
-            "metric": f"{default_pct / total_pm * 100:.0f}% default mode | consider: acceptEdits or custom permissions",
-            "example": (
-                "In .claude/settings.json:\n"
-                '{"permissions": {"allow": [\n'
-                '  "Bash(npm test*)", "Bash(npm run lint*)",\n'
-                '  "Bash(git status*)", "Bash(git diff*)",\n'
-                '  "Read", "Glob", "Grep"\n'
-                "]}}\n\n"
-                "Safer than --dangerously-skip-permissions, shared via git."
-            ),
-        })
+    default_pm_ratio = default_pm / total_pm
+    default_pm_pct = default_pm_ratio * 100
 
-    # 17. Hooks for formatting — if we see many short debugging prompts about lint/format
-    format_prompts = [p for p in prompts if any(
+    format_prompt_count = len([p for p in prompts if any(
         w in p.get("text", "").lower()
         for w in ["lint", "format", "prettier", "eslint", "formatting"]
-    )]
-    if len(format_prompts) > 5:
-        recs.append({
-            "title": "Use a PostToolUse hook for auto-formatting",
-            "severity": "medium",
-            "body": (
-                f"You have {len(format_prompts)} prompts about formatting/linting. "
-                "Set up a PostToolUse hook to auto-format code after Claude edits it. "
-                "Claude generates well-formatted code 90% of the time — the hook handles "
-                "the last 10% so you never waste prompts on formatting issues."
-            ),
-            "metric": f"{len(format_prompts)} format-related prompts | target: 0 (automated)",
-            "example": (
-                "In .claude/settings.json:\n"
-                '{"hooks": {"PostToolUse": [{\n'
-                '  "matcher": "Edit|Write",\n'
-                '  "command": "npx prettier --write $FILE_PATH"\n'
-                "}]}}\n\n"
-                "Now every file Claude touches is auto-formatted."
-            ),
-        })
+    )])
 
-    # 18. Long sessions — suggest background agents for verification
-    long_sessions = [s for s in (work_days or []) if s.get("active_hrs", 0) > 4]
-    if len(long_sessions) > 3:
+    long_session_count = len([s for s in (work_days or []) if s.get("active_hrs", 0) > 4])
+
+    # All template values
+    values = {
+        "total": total, "avg_len": avg_len,
+        "micro_pct": micro_pct, "short_pct": short_pct,
+        "micro_short_pct": micro_pct + short_pct,
+        "debug_pct": debug_pct, "test_pct": test_pct,
+        "ref_pct": ref_pct, "q_pct": q_pct,
+        "build_pct": build_pct, "confirm_pct": confirm_pct,
+        "avg_msgs": avg_msgs, "total_sessions": total_sessions,
+        "opus_pct": opus_pct,
+        "sa_count": sa_count, "explore_count": explore_count, "gp_count": gp_count,
+        "compaction_count": compaction_count,
+        "tool_pct": tool_pct, "conversation_pct": conversation_pct,
+        "thinking": thinking, "thinking_per_session": thinking_per_session,
+        "skill_count": skill_count,
+        "default_pm_ratio": default_pm_ratio, "default_pm_pct": default_pm_pct,
+        "format_prompt_count": format_prompt_count,
+        "long_session_count": long_session_count,
+    }
+
+    triggered_ids = set()
+
+    for rule in rules:
+        # Evaluate condition
+        cond = rule["condition"]
+        ctype = cond["type"]
+
+        if ctype == "simple":
+            if not _check_condition(cond, values):
+                continue
+        elif ctype == "sum_gt":
+            total_val = sum(values.get(m, 0) for m in cond["metrics"])
+            if total_val <= cond["threshold"]:
+                continue
+        elif ctype == "or":
+            if not any(_check_condition(c, values) for c in cond["conditions"]):
+                continue
+        elif ctype == "compound_and":
+            if not all(_check_condition(c, values) for c in cond["conditions"]):
+                continue
+            if cond.get("excludes") and cond["excludes"] in triggered_ids:
+                continue
+        elif ctype == "computed":
+            if not _check_condition(
+                {"metric": cond["computed_metric"], "operator": cond["operator"],
+                 "threshold": cond["threshold"]},
+                values,
+            ):
+                continue
+        else:
+            continue
+
+        triggered_ids.add(rule["id"])
+
+        # Determine severity
+        severity = rule["severity"]
+        if "severity_override" in rule:
+            so = rule["severity_override"]
+            if _check_condition(so["condition"], values):
+                severity = so["severity"]
+
+        # Determine body text
+        if "body_variants" in rule:
+            variant = "default"
+            bvc = rule.get("body_variant_condition")
+            if bvc and _check_condition(bvc, values):
+                variant = bvc["variant"]
+            body = _render_template(rule["body_variants"][variant], values)
+        else:
+            body = _render_template(rule["body_template"], values)
+
+        metric = _render_template(rule["metric_template"], values)
+
+        # Build example with real prompt data when available
+        example = ""
+        example_type = rule.get("example_type")
+        if example_type == "short_prompts":
+            short_examples = find_short_prompts(prompts)
+            if short_examples:
+                example = rule["example_preamble"] + "\n"
+                for ex in short_examples[:3]:
+                    example += f'  > "{ex}"\n'
+                example += "\n" + rule["example_suggestion"]
+        elif example_type == "category_prompts":
+            cat = rule["example_category"]
+            max_count = rule.get("example_max_count", 3)
+            cat_examples = find_example_prompts(prompts, cat, max_count)
+            if cat_examples:
+                example = rule["example_preamble"] + "\n"
+                for ex in cat_examples[:max_count]:
+                    example += f'  > "{ex}"\n'
+                example += "\n" + rule["example_suggestion"]
+
+        if not example:
+            example = rule["fallback_example"]
+
         recs.append({
-            "title": "Use background agents for long tasks",
-            "severity": "low",
-            "body": (
-                f"You have {len(long_sessions)} sessions over 4 hours. For long-running "
-                "tasks, ask Claude to verify its work with a background agent when done, "
-                "or use an AgentStop hook to run validation automatically. This catches "
-                "drift and regressions in marathon sessions."
-            ),
-            "metric": f"{len(long_sessions)} sessions > 4h active time",
-            "example": (
-                "At the end of a long feature task, say:\n"
-                '"Before you finish, run the full test suite and verify all TypeScript '
-                'types still compile. If anything fails, fix it."\n\n'
-                "Or add a Stop hook that runs tests when a session ends."
-            ),
+            "title": rule["title"],
+            "severity": severity,
+            "body": body,
+            "metric": metric,
+            "example": example,
         })
 
     return recs

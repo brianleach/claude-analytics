@@ -1,0 +1,334 @@
+[
+  {
+    "id": "prompt_specificity",
+    "title": "Front-load context in your prompts",
+    "section": "prompting",
+    "condition": {
+      "type": "sum_gt",
+      "metrics": ["micro_pct", "short_pct"],
+      "threshold": 25
+    },
+    "severity": "high",
+    "severity_override": {
+      "condition": {"metric": "avg_len", "operator": ">", "threshold": 200},
+      "severity": "medium"
+    },
+    "body_variants": {
+      "default": "{{micro_short_pct:.0f}}% of your prompts are under 50 characters. Short prompts force Claude to guess, burning tokens on clarification. Include: file path, expected vs actual behavior, and constraints. A specific 100-char prompt saves 5 rounds of back-and-forth.",
+      "bimodal": "{{micro_short_pct:.0f}}% of your prompts are under 50 characters (though your avg is {{avg_len}} chars \u2014 a bimodal pattern). Those short prompts are often confirmations or follow-ups that force extra round-trips. Try batching context into fewer, richer prompts."
+    },
+    "body_variant_condition": {
+      "metric": "avg_len",
+      "operator": ">",
+      "threshold": 200,
+      "variant": "bimodal"
+    },
+    "metric_template": "your avg: {{avg_len}} chars | {{micro_short_pct:.0f}}% under 50 chars",
+    "example_type": "short_prompts",
+    "example_preamble": "Your short prompts include:",
+    "example_suggestion": "Try instead:\n\"Fix the login form in src/auth/LoginForm.tsx \u2014 it shows a blank screen after submitting valid credentials. The handleSubmit callback should redirect to /dashboard but router.push isn't firing.\"",
+    "fallback_example": "Instead of \"fix the bug\", try:\n\"Fix the login form in src/auth/LoginForm.tsx \u2014 blank screen after submit. handleSubmit should redirect to /dashboard.\""
+  },
+  {
+    "id": "confirmation_ratio",
+    "title": "Reduce confirmation ping-pong",
+    "section": "prompting",
+    "condition": {
+      "type": "simple",
+      "metric": "confirm_pct",
+      "operator": ">",
+      "threshold": 15
+    },
+    "severity": "medium",
+    "body_template": "{{confirm_pct}}% of your prompts are confirmations (yes, ok, go ahead, etc). This suggests Claude is asking for permission too often. Set up a CLAUDE.md with your conventions so Claude can act autonomously, and use permission mode flags to reduce approval prompts.",
+    "metric_template": "{{confirm_pct}}% confirmations | target: <10%",
+    "example_type": "category_prompts",
+    "example_category": "confirmation",
+    "example_max_count": 3,
+    "example_preamble": "Your confirmation prompts include:",
+    "example_suggestion": "Eliminate these by adding to CLAUDE.md:\n- Auto-fix lint errors without asking\n- Run tests after every code change\n- Commit with descriptive messages, don't ask for approval",
+    "fallback_example": "Add to CLAUDE.md:\n- Auto-fix lint errors without asking\n- Run tests after every code change\n- Commit with descriptive messages, don't ask for approval"
+  },
+  {
+    "id": "debug_ratio",
+    "title": "Reduce debugging cycles",
+    "section": "prompting",
+    "condition": {
+      "type": "simple",
+      "metric": "debug_pct",
+      "operator": ">",
+      "threshold": 12
+    },
+    "severity": "medium",
+    "severity_override": {
+      "condition": {"metric": "debug_pct", "operator": ">", "threshold": 20},
+      "severity": "high"
+    },
+    "body_template": "{{debug_pct}}% of your prompts are debugging. Reduce this by: 1) pasting full error messages + stack traces upfront, 2) asking Claude to add error handling proactively when building, 3) requesting defensive coding patterns like input validation.",
+    "metric_template": "{{debug_pct}}% debugging | target: <10%",
+    "example_type": "category_prompts",
+    "example_category": "debugging",
+    "example_max_count": 2,
+    "example_preamble": "Your debugging prompts:",
+    "example_suggestion": "Level up by including:\n- The full error message and stack trace\n- What you expected vs what happened\n- Steps to reproduce",
+    "fallback_example": "\"Fix the crash in PaymentService.processOrder() \u2014 here's the stack trace: [paste]. It fails when the cart has items with quantity > 99.\""
+  },
+  {
+    "id": "testing",
+    "title": "Ask for tests alongside features",
+    "section": "prompting",
+    "condition": {
+      "type": "simple",
+      "metric": "test_pct",
+      "operator": "<",
+      "threshold": 5
+    },
+    "severity": "medium",
+    "body_template": "Only {{test_pct}}% of prompts mention testing. Bundling test requests with feature work catches regressions early and forces Claude to think about edge cases during implementation. This is one of Claude's strongest capabilities \u2014 use it.",
+    "metric_template": "{{test_pct}}% testing | recommended: 10-15%",
+    "fallback_example": "\"Implement the user search endpoint and write tests covering: empty query, special characters, pagination boundaries, and a user with no matching results.\""
+  },
+  {
+    "id": "questions",
+    "title": "Use Claude as a thinking partner first",
+    "section": "prompting",
+    "condition": {
+      "type": "simple",
+      "metric": "q_pct",
+      "operator": "<",
+      "threshold": 8
+    },
+    "severity": "medium",
+    "body_template": "Only {{q_pct}}% of your prompts are questions. Before diving into implementation, spend 30 seconds asking Claude to explain tradeoffs, review your approach, or suggest architecture. A quick question prevents expensive wrong turns.",
+    "metric_template": "{{q_pct}}% questions | consider: 10-15%",
+    "fallback_example": "\"Before I implement caching, walk me through the tradeoffs between Redis and in-memory for our case. We have ~1000 req/min and data changes every 5 minutes. What would you recommend?\""
+  },
+  {
+    "id": "refactoring",
+    "title": "Schedule refactoring passes",
+    "section": "prompting",
+    "condition": {
+      "type": "simple",
+      "metric": "ref_pct",
+      "operator": "<",
+      "threshold": 3
+    },
+    "severity": "low",
+    "body_template": "Only {{ref_pct}}% of prompts involve refactoring. After features ship, ask Claude to clean up. It excels at mechanical refactoring \u2014 extracting shared utils, simplifying complex functions, improving naming, reducing duplication.",
+    "metric_template": "{{ref_pct}}% refactoring | healthy: 5-10%",
+    "fallback_example": "\"Review src/api/ for duplicated logic across endpoints. Extract shared patterns into middleware or utility functions. Don't change behavior, just clean up the structure.\""
+  },
+  {
+    "id": "batching",
+    "title": "Batch related changes into single prompts",
+    "section": "session",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "avg_msgs",
+      "operator": ">",
+      "threshold": 100
+    },
+    "severity": "medium",
+    "body_template": "You average {{avg_msgs:.0f}} messages per session. Try combining related changes: instead of 5 separate prompts for 5 files, list all changes in one. Claude handles multi-file changes well and produces more coherent diffs.",
+    "metric_template": "{{avg_msgs:.0f}} msgs/session avg",
+    "fallback_example": "\"Rename userService to authService across the codebase: 1) rename the file, 2) update all imports, 3) update tests, 4) update config references.\""
+  },
+  {
+    "id": "claude_md",
+    "title": "Use CLAUDE.md for persistent context",
+    "section": "session",
+    "condition": {
+      "type": "or",
+      "conditions": [
+        {"metric": "confirm_pct", "operator": ">", "threshold": 10},
+        {"metric": "micro_pct", "operator": ">", "threshold": 15}
+      ]
+    },
+    "severity": "low",
+    "body_template": "Put project conventions, file structure, and recurring instructions in a CLAUDE.md file in your project root. Claude reads it at session start, so you never have to repeat setup instructions. This single file can eliminate dozens of wasted prompts per session.",
+    "metric_template": "{{total_sessions}} sessions could each save setup prompts",
+    "fallback_example": "# CLAUDE.md\n- React Native app using Expo + TypeScript strict\n- Run tests: npx jest --watchAll=false\n- Always use functional components with hooks\n- API config in src/config/api.ts\n- Don't ask before running tests or fixing lint"
+  },
+  {
+    "id": "model_selection",
+    "title": "Use lighter models for routine tasks",
+    "section": "model",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "opus_pct",
+      "operator": ">",
+      "threshold": 70
+    },
+    "severity": "medium",
+    "severity_override": {
+      "condition": {"metric": "opus_pct", "operator": ">", "threshold": 85},
+      "severity": "high"
+    },
+    "body_template": "Opus accounts for {{opus_pct}}% of your estimated API cost. For routine tasks like file searches, simple edits, code formatting, and grep operations, Sonnet or Haiku are 5-20x cheaper and just as effective. Reserve Opus for complex reasoning and architecture.",
+    "metric_template": "Opus: {{opus_pct}}% of spend | Haiku is 19x cheaper per token",
+    "fallback_example": "Use Claude Code's model selection:\n- /model haiku  \u2192 quick lookups, file searches, simple fixes\n- /model sonnet \u2192 standard coding, refactoring, tests\n- /model opus   \u2192 complex architecture, debugging hard issues"
+  },
+  {
+    "id": "subagent_explore",
+    "title": "Prefer Explore agents over general-purpose",
+    "section": "subagent",
+    "condition": {
+      "type": "compound_and",
+      "conditions": [
+        {"metric": "sa_count", "operator": ">", "threshold": 0},
+        {"metric": "gp_count", "operator": ">", "threshold_metric": "explore_count"},
+        {"metric": "gp_count", "operator": ">", "threshold": 20}
+      ]
+    },
+    "severity": "medium",
+    "body_template": "You spawned {{gp_count}} general-purpose agents vs {{explore_count}} Explore agents. Explore agents use Haiku (much cheaper) and are optimized for code search, file discovery, and quick lookups. Use general-purpose only when the subagent needs to write code or make complex decisions.",
+    "metric_template": "{{gp_count}} general-purpose | {{explore_count}} Explore agents",
+    "fallback_example": "Claude automatically picks agent types, but you can influence it:\n- 'find all files that import UserService' \u2192 Explore agent\n- 'search for how auth is implemented' \u2192 Explore agent\n- 'refactor the auth module' \u2192 general-purpose agent"
+  },
+  {
+    "id": "subagent_parallel",
+    "title": "Let Claude use subagents for parallel work",
+    "section": "subagent",
+    "condition": {
+      "type": "compound_and",
+      "conditions": [
+        {"metric": "sa_count", "operator": ">", "threshold": 0},
+        {"metric": "sa_count", "operator": "<", "threshold": 10},
+        {"metric": "total_sessions", "operator": ">", "threshold": 20}
+      ],
+      "excludes": "subagent_explore"
+    },
+    "severity": "low",
+    "body_template": "You've only spawned {{sa_count}} subagents across {{total_sessions}} sessions. Subagents let Claude search code, explore files, and run tasks in parallel. For complex tasks, explicitly ask Claude to 'search in parallel' or 'explore multiple approaches' to unlock this.",
+    "metric_template": "{{sa_count}} subagents across {{total_sessions}} sessions",
+    "fallback_example": "\"Find all API endpoints that don't have authentication middleware and search for any tests that cover unauthenticated access \u2014 do both searches in parallel.\""
+  },
+  {
+    "id": "compaction",
+    "title": "Start fresh sessions more often",
+    "section": "subagent",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "compaction_count",
+      "operator": ">",
+      "threshold": 3
+    },
+    "severity": "medium",
+    "severity_override": {
+      "condition": {"metric": "compaction_count", "operator": ">", "threshold": 10},
+      "severity": "high"
+    },
+    "body_template": "Your sessions triggered {{compaction_count}} context compactions \u2014 meaning Claude's context window filled up and had to be summarized. After compaction, Claude loses nuance from earlier in the conversation. Start new sessions when switching tasks or after major milestones.",
+    "metric_template": "{{compaction_count}} compactions | each loses context detail",
+    "fallback_example": "Good session boundaries:\n- After completing a feature \u2192 new session for the next one\n- After a successful deploy \u2192 new session for bug fixes\n- When switching projects \u2192 always start fresh"
+  },
+  {
+    "id": "context_bloat",
+    "title": "Reduce context window bloat from tool output",
+    "section": "subagent",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "tool_pct",
+      "operator": ">",
+      "threshold": 85
+    },
+    "severity": "medium",
+    "body_template": "{{tool_pct}}% of Claude's output goes to tool results (file reads, command output, search results). This fills the context window fast. Use targeted file reads (specific line ranges), limit grep results, and ask Claude to search for specific patterns rather than reading entire files.",
+    "metric_template": "{{tool_pct}}% tool output | {{conversation_pct}}% conversation",
+    "fallback_example": "Instead of: 'read the entire auth module'\nTry: 'read the handleLogin function in src/auth/login.ts (around line 45-80)'\n\nInstead of: 'search for all uses of UserContext'\nTry: 'find where UserContext.Provider is rendered (should be in App.tsx)'"
+  },
+  {
+    "id": "thinking_heavy",
+    "title": "Extended thinking is being used heavily",
+    "section": "subagent",
+    "condition": {
+      "type": "compound_and",
+      "conditions": [
+        {"metric": "thinking", "operator": ">", "threshold": 0},
+        {"metric": "total", "operator": ">", "threshold": 0},
+        {"metric": "thinking_per_session", "operator": ">", "threshold": 15}
+      ]
+    },
+    "severity": "low",
+    "body_template": "Claude used extended thinking {{thinking}} times across your sessions (~{{thinking_per_session:.0f}}/session). This is great for complex problems but uses more tokens. For simple tasks, you can nudge Claude to act directly: 'just do it, no need to overthink this.'",
+    "metric_template": "{{thinking}} thinking blocks | {{thinking_per_session:.0f}}/session",
+    "fallback_example": "Thinking is valuable for:\n- Debugging complex race conditions\n- Designing system architecture\n- Multi-file refactoring plans\n\nSkip it for: simple renames, formatting, straightforward edits"
+  },
+  {
+    "id": "mcp_integrations",
+    "title": "Explore more MCP integrations",
+    "section": "subagent",
+    "condition": {
+      "type": "compound_and",
+      "conditions": [
+        {"metric": "skill_count", "operator": ">", "threshold": 0},
+        {"metric": "skill_count", "operator": "<", "threshold": 3}
+      ]
+    },
+    "severity": "low",
+    "body_template": "You're using {{skill_count}} MCP tool(s). Claude Code supports integrations with Linear, GitHub, Sentry, Figma, Slack, and many more. MCP tools let Claude take actions directly in your tools \u2014 creating tickets, fetching error reports, reading designs \u2014 without leaving the terminal.",
+    "metric_template": "{{skill_count}} MCP integrations active",
+    "fallback_example": "Popular MCP integrations:\n- Linear: create/update tickets from code context\n- Sentry: fetch error details for debugging\n- Figma: read designs for implementation\n- GitHub: manage PRs and issues"
+  },
+  {
+    "id": "verification_loop",
+    "title": "Give Claude a way to verify its work",
+    "section": "boris",
+    "condition": {
+      "type": "compound_and",
+      "conditions": [
+        {"metric": "build_pct", "operator": ">", "threshold": 10},
+        {"metric": "test_pct", "operator": "<", "threshold": 5}
+      ]
+    },
+    "severity": "high",
+    "body_template": "You're building {{build_pct}}% of the time but only testing {{test_pct}}%. The single most impactful Claude Code habit: give it a feedback loop. When Claude can run tests after every change, output quality jumps 2-3x. Add test commands to CLAUDE.md so Claude runs them automatically.",
+    "metric_template": "{{build_pct}}% building | {{test_pct}}% testing | recommended: test every change",
+    "fallback_example": "Add to CLAUDE.md:\n- After ANY code change, run: npm test -- --related\n- After UI changes, run: npx playwright test\n- Before committing, run: npm run lint && npm run typecheck\n\nOr use a PostToolUse hook in .claude/settings.json to auto-format/test."
+  },
+  {
+    "id": "permission_mode",
+    "title": "Use /permissions instead of clicking allow",
+    "section": "boris",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "default_pm_ratio",
+      "operator": ">",
+      "threshold": 0.5
+    },
+    "severity": "medium",
+    "body_template": "{{default_pm_pct:.0f}}% of your messages are in default permission mode. You're likely clicking 'allow' repeatedly for safe commands. Use /permissions to pre-approve safe commands (git, npm test, lint) and check them into .claude/settings.json to share with your team.",
+    "metric_template": "{{default_pm_pct:.0f}}% default mode | consider: acceptEdits or custom permissions",
+    "fallback_example": "In .claude/settings.json:\n{\"permissions\": {\"allow\": [\n  \"Bash(npm test*)\", \"Bash(npm run lint*)\",\n  \"Bash(git status*)\", \"Bash(git diff*)\",\n  \"Read\", \"Glob\", \"Grep\"\n]}}\n\nSafer than --dangerously-skip-permissions, shared via git."
+  },
+  {
+    "id": "formatting_hooks",
+    "title": "Use a PostToolUse hook for auto-formatting",
+    "section": "boris",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "format_prompt_count",
+      "operator": ">",
+      "threshold": 5
+    },
+    "severity": "medium",
+    "body_template": "You have {{format_prompt_count}} prompts about formatting/linting. Set up a PostToolUse hook to auto-format code after Claude edits it. Claude generates well-formatted code 90% of the time \u2014 the hook handles the last 10% so you never waste prompts on formatting issues.",
+    "metric_template": "{{format_prompt_count}} format-related prompts | target: 0 (automated)",
+    "fallback_example": "In .claude/settings.json:\n{\"hooks\": {\"PostToolUse\": [{\n  \"matcher\": \"Edit|Write\",\n  \"command\": \"npx prettier --write $FILE_PATH\"\n}]}}\n\nNow every file Claude touches is auto-formatted."
+  },
+  {
+    "id": "long_sessions",
+    "title": "Use background agents for long tasks",
+    "section": "boris",
+    "condition": {
+      "type": "computed",
+      "computed_metric": "long_session_count",
+      "operator": ">",
+      "threshold": 3
+    },
+    "severity": "low",
+    "body_template": "You have {{long_session_count}} sessions over 4 hours. For long-running tasks, ask Claude to verify its work with a background agent when done, or use an AgentStop hook to run validation automatically. This catches drift and regressions in marathon sessions.",
+    "metric_template": "{{long_session_count}} sessions > 4h active time",
+    "fallback_example": "At the end of a long feature task, say:\n\"Before you finish, run the full test suite and verify all TypeScript types still compile. If anything fails, fix it.\"\n\nOr add a Stop hook that runs tests when a session ends."
+  }
+]
