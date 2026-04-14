@@ -1,20 +1,24 @@
 .PHONY: install run run-no-api benchmark test
 
+VENV := .venv
+PYTHON := $(VENV)/bin/python
+
 # Default: install Python port with AI support
 install:
-	cd ports/python && pip install -e ".[ai]"
+	python3 -m venv $(VENV)
+	$(PYTHON) -m pip install -e "ports/python[ai]"
 
 # Run the Python port (primary, with AI recommendations)
 run:
-	cd ports/python && python -m claude_analytics
+	$(PYTHON) -m claude_analytics
 
 # Run without AI (no API key needed)
 run-no-api:
-	cd ports/python && python -m claude_analytics --no-api
+	$(PYTHON) -m claude_analytics --no-api
 
 # Run tests
 test:
-	cd ports/python && python -m unittest discover tests/ -v
+	$(PYTHON) -m unittest discover ports/python/tests/ -v
 
 # Benchmark all ports
 benchmark:
