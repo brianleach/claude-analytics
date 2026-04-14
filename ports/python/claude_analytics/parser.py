@@ -373,32 +373,22 @@ def parse_subagents(claude_dir, tz_offset):
     }
 
 
-def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
-    """Parse all session data and return structured analytics.
+def _extract_sessions(session_files, tz_offset, since_date):
+    """Extract raw messages from JSONL session files (Pass 1).
 
-    Args:
-        claude_dir: Path to the .claude directory.
-        tz_offset: Timezone offset in hours from UTC.
-        since_date: Optional ISO date string (YYYY-MM-DD). If provided, only
-                    messages on or after this date are included.
+    Returns a dict with all extracted data needed for aggregation:
+        all_messages, sessions_meta, prompts, drilldown,
+        model_counts, branch_activity, version_counts, thinking_count,
+        total_tool_result_tokens, total_conversation_tokens,
+        skill_usage, slash_commands, permission_modes.
     """
-    if tz_offset is None:
-        tz_offset = detect_timezone_offset()
-
-    session_files = find_session_files(claude_dir)
-
-    if not session_files:
-        raise ValueError(
-            "No session files found. Use Claude Code for a while first!"
-        )
-
-    # === Pass 1: Extract all messages ===
     all_messages = []
     sessions_meta = []
     prompts = []
     drilldown = defaultdict(lambda: defaultdict(list))
+    skipped_files = 0
+    skipped_lines = 0
 
-    # New: track models, branches, versions, thinking blocks, cost
     model_counts = defaultdict(lambda: {"msgs": 0, "input": 0, "output": 0, "cache_read": 0, "cache_write": 0})
     branch_activity = defaultdict(lambda: {"msgs": 0, "sessions": set(), "projects": set()})
     version_counts = defaultdict(int)
@@ -435,6 +425,7 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
                     try:
                         d = json.loads(line)
                     except json.JSONDecodeError:
+                        skipped_lines += 1
                         continue
 
                     msg_type = d.get("type")
@@ -619,6 +610,7 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
                         })
 
         except Exception:
+            skipped_files += 1
             continue
 
         if timestamps:
@@ -640,11 +632,30 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
                 "cache_write_tokens": session_cache_write,
             })
 
-    # === Pass 2: Aggregate ===
-    user_messages = [m for m in all_messages if m["type"] == "user"]
-    asst_messages = [m for m in all_messages if m["type"] == "assistant"]
+    return {
+        "all_messages": all_messages,
+        "sessions_meta": sessions_meta,
+        "prompts": prompts,
+        "drilldown": drilldown,
+        "model_counts": model_counts,
+        "branch_activity": branch_activity,
+        "version_counts": version_counts,
+        "thinking_count": thinking_count,
+        "total_tool_result_tokens": total_tool_result_tokens,
+        "total_conversation_tokens": total_conversation_tokens,
+        "skill_usage": skill_usage,
+        "slash_commands": slash_commands,
+        "permission_modes": permission_modes,
+        "skipped_files": skipped_files,
+        "skipped_lines": skipped_lines,
+    }
 
-    # Daily data
+
+def _aggregate_daily(user_messages, asst_messages):
+    """Aggregate messages into daily stats.
+
+    Returns (daily_data list, all_dates sorted list).
+    """
     daily_user = defaultdict(int)
     daily_asst = defaultdict(int)
     daily_tools = defaultdict(int)
@@ -668,20 +679,29 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         }
         for d in all_dates
     ]
+    return daily_data, all_dates
 
-    # Heatmap
-    heatmap_data = []
+
+def _build_heatmap(user_messages):
+    """Build a weekday x hour heatmap from user messages."""
     heatmap_counts = defaultdict(int)
     for m in user_messages:
         heatmap_counts[f"{m['weekday']}_{m['hour']}"] += 1
+    heatmap_data = []
     for wd in range(7):
         for hr in range(24):
             heatmap_data.append({
                 "weekday": wd, "hour": hr,
                 "count": heatmap_counts.get(f"{wd}_{hr}", 0),
             })
+    return heatmap_data
 
-    # Project stats
+
+def _compute_project_stats(all_messages):
+    """Compute per-project statistics.
+
+    Returns (project_data sorted list, project_stats dict).
+    """
     project_stats = defaultdict(
         lambda: {
             "user_msgs": 0, "assistant_msgs": 0, "tool_calls": 0,
@@ -713,8 +733,14 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         ],
         key=lambda x: -x["total_msgs"],
     )
+    return project_data, project_stats
 
-    # Tool stats
+
+def _compute_tool_stats(asst_messages):
+    """Compute tool usage counts.
+
+    Returns (tool_data top-20 list, tool_counts dict).
+    """
     tool_counts = defaultdict(int)
     for m in asst_messages:
         for t in m.get("tool_uses", []):
@@ -723,14 +749,11 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         {"tool": t, "count": c}
         for t, c in sorted(tool_counts.items(), key=lambda x: -x[1])[:20]
     ]
+    return tool_data, tool_counts
 
-    # Hourly
-    hourly_counts = defaultdict(int)
-    for m in user_messages:
-        hourly_counts[m["hour"]] += 1
-    hourly_data = [{"hour": h, "count": hourly_counts.get(h, 0)} for h in range(24)]
 
-    # Session durations
+def _analyze_session_durations(sessions_meta, tz_offset):
+    """Compute session duration metrics from session metadata."""
     session_durations = []
     for s in sessions_meta:
         try:
@@ -754,8 +777,11 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
             })
         except Exception:
             continue
+    return session_durations
 
-    # Weekly
+
+def _aggregate_weekly(user_messages):
+    """Aggregate user messages into weekly stats."""
     weekly_agg = defaultdict(lambda: {"user_msgs": 0, "sessions": set()})
     for m in user_messages:
         dt = datetime.fromisoformat(m["timestamp"].replace("Z", "+00:00"))
@@ -769,6 +795,19 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         ],
         key=lambda x: x["week"],
     )
+    return weekly_data
+
+
+def _compute_work_patterns(user_messages, session_durations, tz_offset):
+    """Compute hourly efficiency and working hours estimates.
+
+    Returns (hourly_data, efficiency_data, work_days).
+    """
+    # Hourly counts
+    hourly_counts = defaultdict(int)
+    for m in user_messages:
+        hourly_counts[m["hour"]] += 1
+    hourly_data = [{"hour": h, "count": hourly_counts.get(h, 0)} for h in range(24)]
 
     # Efficiency by start hour
     hour_eff = defaultdict(
@@ -816,7 +855,11 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
             "prompts": len(times),
         })
 
-    # Prompt analysis
+    return hourly_data, efficiency_data, work_days
+
+
+def _categorize_prompts(prompts):
+    """Categorize and bucket prompts into an analysis dict."""
     cat_counts = defaultdict(int)
     lb_counts = defaultdict(int)
     proj_quality = defaultdict(
@@ -870,8 +913,15 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
             key=lambda x: -x["count"],
         ),
     }
+    return analysis
 
-    # === NEW: Model breakdown ===
+
+def _compute_model_breakdown(model_counts):
+    """Compute model breakdown with cost estimates.
+
+    Returns (model_breakdown list, total_output, total_input,
+             total_cache_read, total_cache_write, total_cost).
+    """
     total_output = sum(v["output"] for v in model_counts.values())
     total_input = sum(v["input"] for v in model_counts.values())
     total_cache_read = sum(v["cache_read"] for v in model_counts.values())
@@ -898,13 +948,15 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
             "estimated_cost": round(cost, 2),
         })
 
-    # === NEW: Cost estimation ===
     total_cost = sum(m["estimated_cost"] for m in model_breakdown)
+    return model_breakdown, total_output, total_input, total_cache_read, total_cache_write, total_cost
 
-    # === NEW: Subagent analysis ===
-    subagent_data = parse_subagents(claude_dir, tz_offset)
 
-    # Add subagent costs
+def _compute_subagent_costs(subagent_data):
+    """Add cost estimates to subagent data. Mutates subagent_data in place.
+
+    Returns the subagent cost.
+    """
     subagent_cost = 0
     for raw_model, tokens in subagent_data["model_tokens"].items():
         cost_tier = match_model_cost(raw_model)
@@ -914,10 +966,27 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
             + tokens["cache_read"] / 1_000_000 * cost_tier["cache_read"]
         )
     subagent_data["estimated_cost"] = round(subagent_cost, 2)
-    total_cost += subagent_cost
+    return subagent_cost
 
-    # === NEW: Git branch data ===
-    branch_data = sorted(
+
+def _compute_context_efficiency(total_tool_result_tokens, total_conversation_tokens,
+                                total_output, thinking_count, subagent_data):
+    """Compute context efficiency metrics."""
+    total_all_output = total_output + subagent_data["total_subagent_output_tokens"]
+    return {
+        "tool_output_tokens": total_tool_result_tokens,
+        "conversation_tokens": total_conversation_tokens,
+        "tool_pct": round(total_tool_result_tokens / max(total_output, 1) * 100, 1),
+        "conversation_pct": round(total_conversation_tokens / max(total_output, 1) * 100, 1),
+        "thinking_blocks": thinking_count,
+        "subagent_output_tokens": subagent_data["total_subagent_output_tokens"],
+        "subagent_pct": round(subagent_data["total_subagent_output_tokens"] / max(total_all_output, 1) * 100, 1),
+    }
+
+
+def _build_branch_data(branch_activity):
+    """Build sorted branch activity data (top 20)."""
+    return sorted(
         [
             {
                 "branch": br,
@@ -930,40 +999,13 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         key=lambda x: -x["msgs"],
     )[:20]
 
-    # === NEW: Context efficiency ===
-    total_all_output = total_output + subagent_data["total_subagent_output_tokens"]
-    context_efficiency = {
-        "tool_output_tokens": total_tool_result_tokens,
-        "conversation_tokens": total_conversation_tokens,
-        "tool_pct": round(total_tool_result_tokens / max(total_output, 1) * 100, 1),
-        "conversation_pct": round(total_conversation_tokens / max(total_output, 1) * 100, 1),
-        "thinking_blocks": thinking_count,
-        "subagent_output_tokens": subagent_data["total_subagent_output_tokens"],
-        "subagent_pct": round(subagent_data["total_subagent_output_tokens"] / max(total_all_output, 1) * 100, 1),
-    }
 
-    # === NEW: Version tracking ===
-    version_data = [
-        {"version": v, "count": c}
-        for v, c in sorted(version_counts.items(), key=lambda x: -x[1])[:10]
-    ]
-
-    # === NEW: Skill/MCP usage ===
-    skill_data = [
-        {"skill": s, "count": c}
-        for s, c in sorted(skill_usage.items(), key=lambda x: -x[1])[:15]
-    ]
-
-    # === NEW: Slash command usage ===
-    slash_command_data = [
-        {"command": cmd, "count": c}
-        for cmd, c in sorted(slash_commands.items(), key=lambda x: -x[1])[:15]
-    ]
-
-    # Config
-    config = parse_config(claude_dir)
-
-    summary = {
+def _assemble_summary(sessions_meta, user_messages, asst_messages, all_dates,
+                       project_stats, tool_counts, session_durations,
+                       total_output, total_input, total_cache_read,
+                       total_cache_write, total_cost, tz_offset, since_date):
+    """Assemble the top-level summary dict."""
+    return {
         "total_sessions": len(sessions_meta),
         "total_user_msgs": len(user_messages),
         "total_assistant_msgs": len(asst_messages),
@@ -989,6 +1031,102 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         "estimated_cost": round(total_cost, 2),
     }
 
+
+def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
+    """Parse all session data and return structured analytics.
+
+    Args:
+        claude_dir: Path to the .claude directory.
+        tz_offset: Timezone offset in hours from UTC.
+        since_date: Optional ISO date string (YYYY-MM-DD). If provided, only
+                    messages on or after this date are included.
+    """
+    if tz_offset is None:
+        tz_offset = detect_timezone_offset()
+
+    session_files = find_session_files(claude_dir)
+
+    if not session_files:
+        raise ValueError(
+            "No session files found. Use Claude Code for a while first!"
+        )
+
+    # === Pass 1: Extract raw data from JSONL files ===
+    extracted = _extract_sessions(session_files, tz_offset, since_date)
+
+    all_messages = extracted["all_messages"]
+    sessions_meta = extracted["sessions_meta"]
+    prompts = extracted["prompts"]
+    drilldown = extracted["drilldown"]
+
+    # === Pass 2: Aggregate into metrics ===
+    user_messages = [m for m in all_messages if m["type"] == "user"]
+    asst_messages = [m for m in all_messages if m["type"] == "assistant"]
+
+    daily_data, all_dates = _aggregate_daily(user_messages, asst_messages)
+    heatmap_data = _build_heatmap(user_messages)
+    project_data, project_stats = _compute_project_stats(all_messages)
+    tool_data, tool_counts = _compute_tool_stats(asst_messages)
+    session_durations = _analyze_session_durations(sessions_meta, tz_offset)
+    weekly_data = _aggregate_weekly(user_messages)
+    hourly_data, efficiency_data, work_days = _compute_work_patterns(
+        user_messages, session_durations, tz_offset
+    )
+    analysis = _categorize_prompts(prompts)
+
+    # Model breakdown and costs
+    (model_breakdown, total_output, total_input,
+     total_cache_read, total_cache_write, total_cost) = _compute_model_breakdown(
+        extracted["model_counts"]
+    )
+
+    # Subagent analysis
+    subagent_data = parse_subagents(claude_dir, tz_offset)
+    subagent_cost = _compute_subagent_costs(subagent_data)
+    total_cost += subagent_cost
+
+    # Branch data
+    branch_data = _build_branch_data(extracted["branch_activity"])
+
+    # Context efficiency
+    context_efficiency = _compute_context_efficiency(
+        extracted["total_tool_result_tokens"],
+        extracted["total_conversation_tokens"],
+        total_output,
+        extracted["thinking_count"],
+        subagent_data,
+    )
+
+    # Version tracking
+    version_data = [
+        {"version": v, "count": c}
+        for v, c in sorted(extracted["version_counts"].items(), key=lambda x: -x[1])[:10]
+    ]
+
+    # Skill/MCP usage
+    skill_data = [
+        {"skill": s, "count": c}
+        for s, c in sorted(extracted["skill_usage"].items(), key=lambda x: -x[1])[:15]
+    ]
+
+    # Slash command usage
+    slash_command_data = [
+        {"command": cmd, "count": c}
+        for cmd, c in sorted(extracted["slash_commands"].items(), key=lambda x: -x[1])[:15]
+    ]
+
+    # Config
+    config = parse_config(claude_dir)
+
+    summary = _assemble_summary(
+        sessions_meta, user_messages, asst_messages, all_dates,
+        project_stats, tool_counts, session_durations,
+        total_output, total_input, total_cache_read, total_cache_write,
+        total_cost, tz_offset, since_date,
+    )
+    summary["skipped_files"] = extracted["skipped_files"]
+    summary["skipped_lines"] = extracted["skipped_lines"]
+
     return {
         "dashboard": {
             "summary": summary,
@@ -1013,6 +1151,6 @@ def parse_all_sessions(claude_dir, tz_offset=None, since_date=None):
         "versions": version_data,
         "skills": skill_data,
         "slash_commands": slash_command_data,
-        "permission_modes": dict(permission_modes),
+        "permission_modes": dict(extracted["permission_modes"]),
         "config": config,
     }
