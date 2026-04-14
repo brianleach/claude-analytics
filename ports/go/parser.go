@@ -10,8 +10,15 @@ import (
 	"regexp"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 )
+
+// Pre-compiled regex cache for hasWord to avoid recompilation in hot loops.
+var wordRegexCache sync.Map
+
+// Pre-compiled confirmation regex for CategorizePrompt.
+var confirmRe = regexp.MustCompile(`^(y(es)?|yeah|yep|ok(ay)?|sure|go|do it|proceed|looks good|lgtm|correct|right|confirm|approved|continue|k|yea|np|go ahead|ship it|perfect|great|nice|good|cool|thanks|ty|thx)\s*$`)
 
 // === COST ESTIMATES (per million tokens, USD) ===
 
@@ -142,10 +149,17 @@ func NormalizeModelName(modelStr string) string {
 func hasWord(words []string, text string) bool {
 	for _, w := range words {
 		pattern := `\b` + regexp.QuoteMeta(w) + `\b`
+		if cached, ok := wordRegexCache.Load(pattern); ok {
+			if cached.(*regexp.Regexp).MatchString(text) {
+				return true
+			}
+			continue
+		}
 		re, err := regexp.Compile(pattern)
 		if err != nil {
 			continue
 		}
+		wordRegexCache.Store(pattern, re)
 		if re.MatchString(text) {
 			return true
 		}
@@ -160,7 +174,6 @@ func CategorizePrompt(text string) string {
 		return "micro"
 	}
 
-	confirmRe := regexp.MustCompile(`^(y(es)?|yeah|yep|ok(ay)?|sure|go|do it|proceed|looks good|lgtm|correct|right|confirm|approved|continue|k|yea|np|go ahead|ship it|perfect|great|nice|good|cool|thanks|ty|thx)\s*$`)
 	if confirmRe.MatchString(t) {
 		return "confirmation"
 	}
@@ -496,6 +509,8 @@ type Summary struct {
 	TzOffset             int     `json:"tz_offset"`
 	TzLabel              string  `json:"tz_label"`
 	EstimatedCost        float64 `json:"estimated_cost"`
+	SkippedFiles         int     `json:"skipped_files"`
+	SkippedLines         int     `json:"skipped_lines"`
 }
 
 type Dashboard struct {
@@ -838,6 +853,8 @@ func ParseAllSessions(claudeDir string, tzOffset *int, sinceDate string) (*Parse
 	var sessionsMeta []SessionMeta
 	var prompts []Prompt
 	drilldown := map[string]map[string][]DrilldownEntry{}
+	skippedFiles := 0
+	skippedLines := 0
 
 	// Track models, branches, versions, thinking blocks, cost
 	type modelCount struct {
@@ -879,6 +896,7 @@ func ParseAllSessions(claudeDir string, tzOffset *int, sinceDate string) (*Parse
 
 		file, err := os.Open(fp)
 		if err != nil {
+			skippedFiles++
 			continue
 		}
 
@@ -891,6 +909,7 @@ func ParseAllSessions(claudeDir string, tzOffset *int, sinceDate string) (*Parse
 			}
 			var d map[string]interface{}
 			if err := json.Unmarshal([]byte(line), &d); err != nil {
+				skippedLines++
 				continue
 			}
 
@@ -1729,6 +1748,8 @@ func ParseAllSessions(claudeDir string, tzOffset *int, sinceDate string) (*Parse
 		TzOffset:              offset,
 		TzLabel:               tzLabel,
 		EstimatedCost:         math.Round(totalCost*100) / 100,
+		SkippedFiles:          skippedFiles,
+		SkippedLines:          skippedLines,
 	}
 
 	// Ensure slices are non-nil for JSON

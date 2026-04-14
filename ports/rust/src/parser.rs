@@ -4,14 +4,319 @@ use std::path::{Path, PathBuf};
 
 use chrono::{DateTime, FixedOffset, Local, NaiveDateTime, Datelike, Timelike};
 use regex::Regex;
+use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-/// Truncate a string to at most `max` bytes, ensuring we don't split a multi-byte char.
-fn truncate(s: &str, max: usize) -> &str {
-    if s.len() <= max { return s; }
-    let mut end = max;
-    while end > 0 && !s.is_char_boundary(end) { end -= 1; }
-    &s[..end]
+// === Typed output structs ===
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ParseResult {
+    pub dashboard: Dashboard,
+    pub drilldown: HashMap<String, HashMap<String, Vec<DrilldownEntry>>>,
+    pub analysis: Analysis,
+    pub prompts: Vec<Prompt>,
+    pub work_days: Vec<WorkDay>,
+    pub models: Vec<ModelBreakdown>,
+    pub subagents: SubagentData,
+    pub branches: Vec<BranchData>,
+    pub context_efficiency: ContextEfficiency,
+    pub versions: Vec<VersionData>,
+    pub skills: Vec<SkillData>,
+    pub slash_commands: Vec<SlashCommandData>,
+    pub permission_modes: HashMap<String, i64>,
+    pub config: Config,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Dashboard {
+    pub summary: Summary,
+    pub daily: Vec<DailyData>,
+    pub heatmap: Vec<HeatmapCell>,
+    pub projects: Vec<ProjectData>,
+    pub tools: Vec<ToolData>,
+    pub hourly: Vec<HourlyData>,
+    pub sessions: Vec<SessionDuration>,
+    pub weekly: Vec<WeeklyData>,
+    pub efficiency: Vec<EfficiencyData>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Summary {
+    pub total_sessions: i64,
+    pub total_user_msgs: i64,
+    pub total_assistant_msgs: i64,
+    pub total_tool_calls: i64,
+    pub total_output_tokens: i64,
+    pub total_input_tokens: i64,
+    pub total_cache_read_tokens: i64,
+    pub total_cache_write_tokens: i64,
+    pub date_range_start: String,
+    pub date_range_end: String,
+    pub since_date: String,
+    pub unique_projects: i64,
+    pub unique_tools: i64,
+    pub avg_session_duration: f64,
+    pub tz_offset: i32,
+    pub tz_label: String,
+    pub estimated_cost: f64,
+    pub skipped_files: i64,
+    pub skipped_lines: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DailyData {
+    pub date: String,
+    pub user_msgs: i64,
+    pub assistant_msgs: i64,
+    pub tool_calls: i64,
+    pub output_tokens: i64,
+    pub total_msgs: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HeatmapCell {
+    pub weekday: i64,
+    pub hour: i64,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectData {
+    pub project: String,
+    pub user_msgs: i64,
+    pub assistant_msgs: i64,
+    pub tool_calls: i64,
+    pub sessions: i64,
+    pub output_tokens: i64,
+    pub total_msgs: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ToolData {
+    pub tool: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct HourlyData {
+    pub hour: i64,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SessionDuration {
+    pub session_id: String,
+    pub project: String,
+    pub duration_min: f64,
+    pub user_msgs: i64,
+    pub assistant_msgs: i64,
+    pub tool_uses: i64,
+    pub date: String,
+    pub start_hour: u32,
+    pub msgs_per_min: f64,
+    pub git_branch: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WeeklyData {
+    pub week: String,
+    pub user_msgs: i64,
+    pub sessions: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct EfficiencyData {
+    pub hour: u32,
+    pub avg_msgs_per_session: f64,
+    pub avg_duration: f64,
+    pub sessions: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WorkDay {
+    pub date: String,
+    pub first: String,
+    pub last: String,
+    pub span_hrs: f64,
+    pub active_hrs: f64,
+    pub prompts: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Prompt {
+    pub text: String,
+    pub full_length: i64,
+    pub project: String,
+    pub session_id: String,
+    pub date: String,
+    pub time: String,
+    pub hour: i64,
+    pub weekday: i64,
+    pub category: String,
+    pub length_bucket: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DrilldownEntry {
+    pub time: String,
+    pub text: String,
+    pub category: String,
+    pub length: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Analysis {
+    pub total_prompts: i64,
+    pub avg_length: i64,
+    pub categories: Vec<CategoryStat>,
+    pub length_buckets: Vec<LengthBucketStat>,
+    pub project_quality: Vec<ProjectQuality>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct CategoryStat {
+    pub cat: String,
+    pub count: i64,
+    pub pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct LengthBucketStat {
+    pub bucket: String,
+    pub count: i64,
+    pub pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProjectQuality {
+    pub project: String,
+    pub count: i64,
+    pub avg_len: i64,
+    pub confirm_pct: f64,
+    pub detailed_pct: f64,
+    pub top_cat: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ModelBreakdown {
+    pub model: String,
+    pub display: String,
+    pub msgs: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub cache_write_tokens: i64,
+    pub estimated_cost: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentEntry {
+    pub agent_id: String,
+    #[serde(rename = "type")]
+    pub agent_type: String,
+    pub description: String,
+    pub is_compaction: bool,
+    pub project: String,
+    pub messages: i64,
+    pub tool_calls: i64,
+    pub input_tokens: i64,
+    pub output_tokens: i64,
+    pub cache_read_tokens: i64,
+    pub models: Vec<String>,
+    pub duration_min: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentData {
+    pub subagents: Vec<SubagentEntry>,
+    pub type_counts: HashMap<String, i64>,
+    pub total_count: i64,
+    pub compaction_count: i64,
+    pub total_subagent_input_tokens: i64,
+    pub total_subagent_output_tokens: i64,
+    pub model_tokens: HashMap<String, SubagentModelTokens>,
+    pub estimated_cost: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SubagentModelTokens {
+    pub input: i64,
+    pub output: i64,
+    pub cache_read: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct BranchData {
+    pub branch: String,
+    pub msgs: i64,
+    pub sessions: i64,
+    pub projects: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ContextEfficiency {
+    pub tool_output_tokens: i64,
+    pub conversation_tokens: i64,
+    pub tool_pct: f64,
+    pub conversation_pct: f64,
+    pub thinking_blocks: i64,
+    pub subagent_output_tokens: i64,
+    pub subagent_pct: f64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionData {
+    pub version: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SkillData {
+    pub skill: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SlashCommandData {
+    pub command: String,
+    pub count: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct FeatureFlag {
+    pub name: String,
+    pub enabled: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VersionInfo {
+    pub migration_version: String,
+    pub first_start: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Config {
+    pub has_config: bool,
+    pub plugins: Vec<String>,
+    pub feature_flags: Vec<FeatureFlag>,
+    pub version_info: VersionInfo,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct Recommendation {
+    pub title: String,
+    pub severity: String,
+    pub body: String,
+    pub metric: String,
+    pub example: String,
+    #[serde(default)]
+    pub rec_source: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RecommendationsResult {
+    pub recommendations: Vec<Recommendation>,
+    pub source: String,
 }
 
 // === COST ESTIMATES (per million tokens, USD) ===
@@ -22,6 +327,13 @@ pub struct ModelCost {
     pub cache_write: f64,
 }
 
+/// Truncate a string to at most `max` bytes, ensuring we don't split a multi-byte char.
+fn truncate(s: &str, max: usize) -> &str {
+    if s.len() <= max { return s; }
+    let mut end = max;
+    while end > 0 && !s.is_char_boundary(end) { end -= 1; }
+    &s[..end]
+}
 
 pub fn match_model_cost(model_str: &str) -> ModelCost {
     let m = model_str.to_lowercase();
@@ -219,14 +531,17 @@ pub fn length_bucket(length: usize) -> String {
     }
 }
 
-pub fn parse_config(claude_dir: &Path) -> Value {
+pub fn parse_config(claude_dir: &Path) -> Config {
     let config_path = claude_dir.join(".claude.json");
-    let mut config = serde_json::json!({
-        "has_config": false,
-        "plugins": [],
-        "feature_flags": [],
-        "version_info": {},
-    });
+    let mut config = Config {
+        has_config: false,
+        plugins: vec![],
+        feature_flags: vec![],
+        version_info: VersionInfo {
+            migration_version: String::new(),
+            first_start: String::new(),
+        },
+    };
 
     if !config_path.exists() {
         return config;
@@ -234,44 +549,41 @@ pub fn parse_config(claude_dir: &Path) -> Value {
 
     if let Ok(contents) = fs::read_to_string(&config_path) {
         if let Ok(data) = serde_json::from_str::<Value>(&contents) {
-            config["has_config"] = Value::Bool(true);
+            config.has_config = true;
 
             // Extract plugins
             if let Some(features) = data.get("cachedGrowthBookFeatures").and_then(|v| v.as_object()) {
                 if let Some(amber_lattice) = features.get("tengu_amber_lattice").and_then(|v| v.as_object()) {
                     if let Some(plugins) = amber_lattice.get("value").and_then(|v| v.as_array()) {
-                        let plugin_list: Vec<Value> = plugins.iter()
-                            .filter_map(|p| p.as_str().map(|s| Value::String(s.to_string())))
+                        config.plugins = plugins.iter()
+                            .filter_map(|p| p.as_str().map(|s| s.to_string()))
                             .collect();
-                        config["plugins"] = Value::Array(plugin_list);
                     }
                 }
 
                 // Extract feature flags
-                let mut flag_names = Vec::new();
                 for (key, val) in features {
                     let clean_name = key.replace("tengu_", "");
                     if let Some(obj) = val.as_object() {
                         let enabled = obj.get("value").map(|v| v.as_bool().unwrap_or(false)).unwrap_or(false);
-                        flag_names.push(serde_json::json!({
-                            "name": clean_name,
-                            "enabled": enabled,
-                        }));
+                        config.feature_flags.push(FeatureFlag {
+                            name: clean_name,
+                            enabled,
+                        });
                     } else if let Some(b) = val.as_bool() {
-                        flag_names.push(serde_json::json!({
-                            "name": clean_name,
-                            "enabled": b,
-                        }));
+                        config.feature_flags.push(FeatureFlag {
+                            name: clean_name,
+                            enabled: b,
+                        });
                     }
                 }
-                config["feature_flags"] = Value::Array(flag_names);
             }
 
             // Migration / account info
-            config["version_info"] = serde_json::json!({
-                "migration_version": data.get("migrationVersion").and_then(|v| v.as_str()).unwrap_or(""),
-                "first_start": data.get("firstStartTime").and_then(|v| v.as_str()).unwrap_or(""),
-            });
+            config.version_info = VersionInfo {
+                migration_version: data.get("migrationVersion").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+                first_start: data.get("firstStartTime").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            };
         }
     }
 
@@ -297,7 +609,7 @@ fn apply_tz_offset(dt: &DateTime<FixedOffset>, tz_offset: i32) -> DateTime<Fixed
     dt.with_timezone(&offset)
 }
 
-pub fn parse_subagents(claude_dir: &Path, tz_offset: i32) -> Value {
+pub fn parse_subagents(claude_dir: &Path, _tz_offset: i32) -> SubagentData {
     let (jsonl_files, meta_files) = find_subagent_files(claude_dir);
 
     // Build meta lookup
@@ -314,7 +626,7 @@ pub fn parse_subagents(claude_dir: &Path, tz_offset: i32) -> Value {
         }
     }
 
-    let mut subagents: Vec<Value> = Vec::new();
+    let mut subagents: Vec<SubagentEntry> = Vec::new();
     let mut type_counts: HashMap<String, i64> = HashMap::new();
     let mut model_tokens: HashMap<String, (i64, i64, i64)> = HashMap::new(); // input, output, cache_read
 
@@ -400,25 +712,25 @@ pub fn parse_subagents(claude_dir: &Path, tz_offset: i32) -> Value {
             }
         }
 
-        let agent_id_short = truncate(&agent_id, 12);
-        let desc_short = truncate(&description, 80);
+        let agent_id_short = truncate(&agent_id, 12).to_string();
+        let desc_short = truncate(&description, 80).to_string();
 
-        let models_vec: Vec<Value> = models_used.iter().map(|m| Value::String(m.clone())).collect();
+        let models_vec: Vec<String> = models_used.iter().cloned().collect();
 
-        subagents.push(serde_json::json!({
-            "agent_id": agent_id_short,
-            "type": agent_type,
-            "description": desc_short,
-            "is_compaction": is_compaction,
-            "project": proj_name,
-            "messages": msg_count,
-            "tool_calls": tool_calls,
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "cache_read_tokens": cache_read,
-            "models": models_vec,
-            "duration_min": (duration * 10.0).round() / 10.0,
-        }));
+        subagents.push(SubagentEntry {
+            agent_id: agent_id_short,
+            agent_type: agent_type.clone(),
+            description: desc_short,
+            is_compaction,
+            project: proj_name,
+            messages: msg_count,
+            tool_calls,
+            input_tokens,
+            output_tokens,
+            cache_read_tokens: cache_read,
+            models: models_vec,
+            duration_min: (duration * 10.0).round() / 10.0,
+        });
 
         // Accumulate tokens by model for subagents
         let num_models = models_used.len().max(1) as i64;
@@ -430,36 +742,66 @@ pub fn parse_subagents(claude_dir: &Path, tz_offset: i32) -> Value {
         }
     }
 
-    let type_counts_val: Value = serde_json::to_value(&type_counts).unwrap_or(Value::Object(Default::default()));
+    let model_tokens_map: HashMap<String, SubagentModelTokens> = model_tokens.iter()
+        .map(|(model, (inp, out, cr))| {
+            (model.clone(), SubagentModelTokens {
+                input: *inp,
+                output: *out,
+                cache_read: *cr,
+            })
+        })
+        .collect();
 
-    let model_tokens_val: Value = {
-        let mut map = serde_json::Map::new();
-        for (model, (inp, out, cr)) in &model_tokens {
-            map.insert(model.clone(), serde_json::json!({
-                "input": inp,
-                "output": out,
-                "cache_read": cr,
-            }));
-        }
-        Value::Object(map)
-    };
+    let compaction_count = subagents.iter().filter(|s| s.is_compaction).count() as i64;
+    let total_input: i64 = subagents.iter().map(|s| s.input_tokens).sum();
+    let total_output: i64 = subagents.iter().map(|s| s.output_tokens).sum();
 
-    let compaction_count = subagents.iter().filter(|s| s["is_compaction"].as_bool().unwrap_or(false)).count();
-    let total_input: i64 = subagents.iter().map(|s| s["input_tokens"].as_i64().unwrap_or(0)).sum();
-    let total_output: i64 = subagents.iter().map(|s| s["output_tokens"].as_i64().unwrap_or(0)).sum();
-
-    serde_json::json!({
-        "subagents": subagents,
-        "type_counts": type_counts_val,
-        "total_count": subagents.len(),
-        "compaction_count": compaction_count,
-        "total_subagent_input_tokens": total_input,
-        "total_subagent_output_tokens": total_output,
-        "model_tokens": model_tokens_val,
-    })
+    SubagentData {
+        total_count: subagents.len() as i64,
+        compaction_count,
+        total_subagent_input_tokens: total_input,
+        total_subagent_output_tokens: total_output,
+        model_tokens: model_tokens_map,
+        estimated_cost: 0.0, // Will be computed by caller
+        subagents,
+        type_counts,
+    }
 }
 
-pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date: Option<&str>) -> Result<Value, String> {
+// Internal message struct used during parsing (not serialized to output)
+#[allow(dead_code)]
+struct MsgRecord {
+    timestamp: String,
+    date: String,
+    hour: i64,
+    weekday: i64,
+    msg_type: String, // "user" or "assistant"
+    project: String,
+    session_id: String,
+    tool_uses: Vec<String>,
+    input_tokens: i64,
+    output_tokens: i64,
+    model: String,
+}
+
+#[allow(dead_code)]
+struct SessionMeta {
+    project: String,
+    session_id: String,
+    first_ts: String,
+    last_ts: String,
+    user_msgs: i64,
+    assistant_msgs: i64,
+    tool_uses: i64,
+    model: String,
+    git_branch: Option<String>,
+    input_tokens: i64,
+    output_tokens: i64,
+    cache_read_tokens: i64,
+    cache_write_tokens: i64,
+}
+
+pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date: Option<&str>) -> Result<ParseResult, String> {
     let tz_offset = tz_offset.unwrap_or_else(detect_timezone_offset);
     let session_files = find_session_files(claude_dir)?;
 
@@ -468,11 +810,11 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     }
 
     // === Pass 1: Extract all messages ===
-    let mut all_messages: Vec<Value> = Vec::new();
-    let mut sessions_meta: Vec<Value> = Vec::new();
-    let mut prompts: Vec<Value> = Vec::new();
-    // drilldown: date -> project -> list of prompts
-    let mut drilldown: HashMap<String, HashMap<String, Vec<Value>>> = HashMap::new();
+    let mut all_messages: Vec<MsgRecord> = Vec::new();
+    let mut sessions_meta: Vec<SessionMeta> = Vec::new();
+    let mut prompts: Vec<Prompt> = Vec::new();
+    // drilldown: date -> project -> list of entries
+    let mut drilldown: HashMap<String, HashMap<String, Vec<DrilldownEntry>>> = HashMap::new();
 
     // Model tracking
     struct ModelAccum {
@@ -488,6 +830,8 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     let mut thinking_count: i64 = 0;
     let mut total_tool_result_tokens: i64 = 0;
     let mut total_conversation_tokens: i64 = 0;
+    let mut skipped_files: i64 = 0;
+    let mut skipped_lines: i64 = 0;
     let mut skill_usage: HashMap<String, i64> = HashMap::new();
     let mut slash_commands: HashMap<String, i64> = HashMap::new();
     let mut permission_modes: HashMap<String, i64> = HashMap::new();
@@ -503,14 +847,13 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
         let session_id = filepath.file_stem()
             .map(|s| s.to_string_lossy().to_string())
             .unwrap_or_default();
-        let session_id_short = truncate(&session_id, 8);
+        let session_id_short = truncate(&session_id, 8).to_string();
 
         let mut timestamps: Vec<String> = Vec::new();
         let mut user_msgs: i64 = 0;
         let mut assistant_msgs: i64 = 0;
         let mut tool_uses: i64 = 0;
         let mut model: String = String::new();
-        let mut entrypoint: Option<String> = None;
         let mut git_branch: Option<String> = None;
         let mut session_input_tokens: i64 = 0;
         let mut session_output_tokens: i64 = 0;
@@ -519,7 +862,7 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
 
         let contents = match fs::read_to_string(filepath) {
             Ok(c) => c,
-            Err(_) => continue,
+            Err(_) => { skipped_files += 1; continue; },
         };
 
         for line in contents.lines() {
@@ -529,7 +872,7 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
             }
             let d: Value = match serde_json::from_str(line) {
                 Ok(v) => v,
-                Err(_) => continue,
+                Err(_) => { skipped_lines += 1; continue; },
             };
 
             let msg_type = d.get("type").and_then(|v| v.as_str()).unwrap_or("");
@@ -564,29 +907,26 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
                 }
 
                 user_msgs += 1;
-                if entrypoint.is_none() {
-                    entrypoint = d.get("entrypoint").and_then(|v| v.as_str()).map(|s| s.to_string());
-                }
 
                 let hour = dt.hour() as i64;
                 let weekday = dt.weekday().num_days_from_monday() as i64;
-                let weekday_name = weekday_names[weekday as usize];
+                let _weekday_name = weekday_names[weekday as usize];
                 let time_str = dt.format("%H:%M").to_string();
-                let month_str = dt.format("%Y-%m").to_string();
+                let _month_str = dt.format("%Y-%m").to_string();
 
-                let msg_data = serde_json::json!({
-                    "timestamp": ts,
-                    "date": date_str,
-                    "time": time_str,
-                    "hour": hour,
-                    "weekday": weekday,
-                    "weekday_name": weekday_name,
-                    "month": month_str,
-                    "type": "user",
-                    "project": proj_name,
-                    "session_id": session_id_short,
+                all_messages.push(MsgRecord {
+                    timestamp: ts.to_string(),
+                    date: date_str.clone(),
+                    hour,
+                    weekday,
+                    msg_type: "user".to_string(),
+                    project: proj_name.clone(),
+                    session_id: session_id_short.clone(),
+                    tool_uses: vec![],
+                    input_tokens: 0,
+                    output_tokens: 0,
+                    model: String::new(),
                 });
-                all_messages.push(msg_data);
                 timestamps.push(ts.to_string());
 
                 // Extract prompt text
@@ -625,45 +965,43 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
                 }
 
                 if !text.is_empty() {
-                    let full_length = text.len();
-                    let text_short = truncate(&text, 500);
+                    let full_length = text.len() as i64;
+                    let text_short = truncate(&text, 500).to_string();
                     let category = categorize_prompt(&text);
-                    let lb = length_bucket(full_length);
+                    let lb = length_bucket(text.len());
 
-                    let prompt = serde_json::json!({
-                        "text": text_short,
-                        "full_length": full_length,
-                        "project": proj_name,
-                        "session_id": session_id_short,
-                        "date": date_str,
-                        "time": time_str,
-                        "hour": hour,
-                        "weekday": weekday,
-                        "category": category,
-                        "length_bucket": lb,
+                    prompts.push(Prompt {
+                        text: text_short,
+                        full_length,
+                        project: proj_name.clone(),
+                        session_id: session_id_short.clone(),
+                        date: date_str.clone(),
+                        time: time_str.clone(),
+                        hour,
+                        weekday,
+                        category: category.clone(),
+                        length_bucket: lb,
                     });
-                    prompts.push(prompt);
 
-                    let text_drilldown = truncate(&text, 200);
-                    let drill_entry = serde_json::json!({
-                        "time": time_str,
-                        "text": text_drilldown,
-                        "category": category,
-                        "length": full_length,
-                    });
+                    let text_drilldown = truncate(&text, 200).to_string();
                     drilldown
                         .entry(date_str.clone())
                         .or_default()
                         .entry(proj_name.clone())
                         .or_default()
-                        .push(drill_entry);
+                        .push(DrilldownEntry {
+                            time: time_str.clone(),
+                            text: text_drilldown,
+                            category,
+                            length: full_length,
+                        });
                 }
 
                 // Track branch activity
                 if let Some(ref br) = git_branch {
                     let entry = branch_activity.entry(br.clone()).or_insert_with(|| (0, HashSet::new(), HashSet::new()));
                     entry.0 += 1;
-                    entry.1.insert(session_id_short.to_string());
+                    entry.1.insert(session_id_short.clone());
                     entry.2.insert(proj_name.clone());
                 }
 
@@ -767,48 +1105,45 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
                     entry.0 += 1;
                 }
 
-                let tools_val: Vec<Value> = msg_tools.iter().map(|t| Value::String(t.clone())).collect();
-                all_messages.push(serde_json::json!({
-                    "timestamp": ts,
-                    "date": date_str,
-                    "hour": dt.hour(),
-                    "weekday": dt.weekday().num_days_from_monday(),
-                    "type": "assistant",
-                    "project": proj_name,
-                    "session_id": session_id_short,
-                    "tool_uses": tools_val,
-                    "input_tokens": input_tokens,
-                    "output_tokens": output_tokens,
-                    "model": msg_model,
-                }));
+                all_messages.push(MsgRecord {
+                    timestamp: ts.to_string(),
+                    date: date_str,
+                    hour: dt.hour() as i64,
+                    weekday: dt.weekday().num_days_from_monday() as i64,
+                    msg_type: "assistant".to_string(),
+                    project: proj_name.clone(),
+                    session_id: session_id_short.clone(),
+                    tool_uses: msg_tools,
+                    input_tokens,
+                    output_tokens,
+                    model: msg_model,
+                });
             }
         }
 
         if !timestamps.is_empty() {
             timestamps.sort();
-            sessions_meta.push(serde_json::json!({
-                "project": proj_name,
-                "session_id": session_id_short,
-                "first_ts": timestamps.first().unwrap(),
-                "last_ts": timestamps.last().unwrap(),
-                "user_msgs": user_msgs,
-                "assistant_msgs": assistant_msgs,
-                "tool_uses": tool_uses,
-                "model": model,
-                "entrypoint": entrypoint,
-                "msg_count": user_msgs + assistant_msgs,
-                "git_branch": git_branch,
-                "input_tokens": session_input_tokens,
-                "output_tokens": session_output_tokens,
-                "cache_read_tokens": session_cache_read,
-                "cache_write_tokens": session_cache_write,
-            }));
+            sessions_meta.push(SessionMeta {
+                project: proj_name,
+                session_id: session_id_short,
+                first_ts: timestamps.first().unwrap().clone(),
+                last_ts: timestamps.last().unwrap().clone(),
+                user_msgs,
+                assistant_msgs,
+                tool_uses,
+                model,
+                git_branch,
+                input_tokens: session_input_tokens,
+                output_tokens: session_output_tokens,
+                cache_read_tokens: session_cache_read,
+                cache_write_tokens: session_cache_write,
+            });
         }
     }
 
     // === Pass 2: Aggregate ===
-    let user_messages: Vec<&Value> = all_messages.iter().filter(|m| m["type"] == "user").collect();
-    let asst_messages: Vec<&Value> = all_messages.iter().filter(|m| m["type"] == "assistant").collect();
+    let user_messages: Vec<&MsgRecord> = all_messages.iter().filter(|m| m.msg_type == "user").collect();
+    let asst_messages: Vec<&MsgRecord> = all_messages.iter().filter(|m| m.msg_type == "assistant").collect();
 
     // Daily data
     let mut daily_user: HashMap<String, i64> = HashMap::new();
@@ -817,15 +1152,12 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     let mut daily_tokens: HashMap<String, i64> = HashMap::new();
 
     for m in &user_messages {
-        let date = m["date"].as_str().unwrap_or("");
-        *daily_user.entry(date.to_string()).or_insert(0) += 1;
+        *daily_user.entry(m.date.clone()).or_insert(0) += 1;
     }
     for m in &asst_messages {
-        let date = m["date"].as_str().unwrap_or("");
-        *daily_asst.entry(date.to_string()).or_insert(0) += 1;
-        let tool_count = m["tool_uses"].as_array().map(|a| a.len() as i64).unwrap_or(0);
-        *daily_tools.entry(date.to_string()).or_insert(0) += tool_count;
-        *daily_tokens.entry(date.to_string()).or_insert(0) += m["output_tokens"].as_i64().unwrap_or(0);
+        *daily_asst.entry(m.date.clone()).or_insert(0) += 1;
+        *daily_tools.entry(m.date.clone()).or_insert(0) += m.tool_uses.len() as i64;
+        *daily_tokens.entry(m.date.clone()).or_insert(0) += m.output_tokens;
     }
 
     let mut all_dates: Vec<String> = {
@@ -836,34 +1168,32 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     };
     all_dates.sort();
 
-    let daily_data: Vec<Value> = all_dates.iter().map(|d| {
+    let daily_data: Vec<DailyData> = all_dates.iter().map(|d| {
         let u = daily_user.get(d).copied().unwrap_or(0);
         let a = daily_asst.get(d).copied().unwrap_or(0);
-        serde_json::json!({
-            "date": d,
-            "user_msgs": u,
-            "assistant_msgs": a,
-            "tool_calls": daily_tools.get(d).copied().unwrap_or(0),
-            "output_tokens": daily_tokens.get(d).copied().unwrap_or(0),
-            "total_msgs": u + a,
-        })
+        DailyData {
+            date: d.clone(),
+            user_msgs: u,
+            assistant_msgs: a,
+            tool_calls: daily_tools.get(d).copied().unwrap_or(0),
+            output_tokens: daily_tokens.get(d).copied().unwrap_or(0),
+            total_msgs: u + a,
+        }
     }).collect();
 
     // Heatmap
     let mut heatmap_counts: HashMap<String, i64> = HashMap::new();
     for m in &user_messages {
-        let wd = m["weekday"].as_i64().unwrap_or(0);
-        let hr = m["hour"].as_i64().unwrap_or(0);
-        *heatmap_counts.entry(format!("{}_{}", wd, hr)).or_insert(0) += 1;
+        *heatmap_counts.entry(format!("{}_{}", m.weekday, m.hour)).or_insert(0) += 1;
     }
-    let mut heatmap_data: Vec<Value> = Vec::new();
+    let mut heatmap_data: Vec<HeatmapCell> = Vec::new();
     for wd in 0..7 {
         for hr in 0..24 {
-            heatmap_data.push(serde_json::json!({
-                "weekday": wd,
-                "hour": hr,
-                "count": heatmap_counts.get(&format!("{}_{}", wd, hr)).copied().unwrap_or(0),
-            }));
+            heatmap_data.push(HeatmapCell {
+                weekday: wd,
+                hour: hr,
+                count: heatmap_counts.get(&format!("{}_{}", wd, hr)).copied().unwrap_or(0),
+            });
         }
     }
 
@@ -877,101 +1207,92 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     }
     let mut project_stats: HashMap<String, ProjStats> = HashMap::new();
     for m in &all_messages {
-        let p = m["project"].as_str().unwrap_or("unknown").to_string();
-        let ps = project_stats.entry(p).or_insert(ProjStats {
+        let ps = project_stats.entry(m.project.clone()).or_insert(ProjStats {
             user_msgs: 0, assistant_msgs: 0, tool_calls: 0, sessions: HashSet::new(), output_tokens: 0,
         });
-        ps.sessions.insert(m.get("session_id").and_then(|v| v.as_str()).unwrap_or("").to_string());
-        if m["type"] == "user" {
+        ps.sessions.insert(m.session_id.clone());
+        if m.msg_type == "user" {
             ps.user_msgs += 1;
         } else {
             ps.assistant_msgs += 1;
-            ps.tool_calls += m["tool_uses"].as_array().map(|a| a.len() as i64).unwrap_or(0);
-            ps.output_tokens += m["output_tokens"].as_i64().unwrap_or(0);
+            ps.tool_calls += m.tool_uses.len() as i64;
+            ps.output_tokens += m.output_tokens;
         }
     }
 
-    let mut project_data: Vec<Value> = project_stats.iter().map(|(p, s)| {
-        serde_json::json!({
-            "project": p,
-            "user_msgs": s.user_msgs,
-            "assistant_msgs": s.assistant_msgs,
-            "tool_calls": s.tool_calls,
-            "sessions": s.sessions.len(),
-            "output_tokens": s.output_tokens,
-            "total_msgs": s.user_msgs + s.assistant_msgs,
-        })
+    let mut project_data: Vec<ProjectData> = project_stats.iter().map(|(p, s)| {
+        ProjectData {
+            project: p.clone(),
+            user_msgs: s.user_msgs,
+            assistant_msgs: s.assistant_msgs,
+            tool_calls: s.tool_calls,
+            sessions: s.sessions.len() as i64,
+            output_tokens: s.output_tokens,
+            total_msgs: s.user_msgs + s.assistant_msgs,
+        }
     }).collect();
-    project_data.sort_by(|a, b| b["total_msgs"].as_i64().unwrap_or(0).cmp(&a["total_msgs"].as_i64().unwrap_or(0)));
+    project_data.sort_by(|a, b| b.total_msgs.cmp(&a.total_msgs));
 
     // Tool stats
     let mut tool_counts: HashMap<String, i64> = HashMap::new();
     for m in &asst_messages {
-        if let Some(tools) = m["tool_uses"].as_array() {
-            for t in tools {
-                if let Some(name) = t.as_str() {
-                    *tool_counts.entry(name.to_string()).or_insert(0) += 1;
-                }
-            }
+        for t in &m.tool_uses {
+            *tool_counts.entry(t.clone()).or_insert(0) += 1;
         }
     }
     let mut tool_data_vec: Vec<(String, i64)> = tool_counts.into_iter().collect();
     tool_data_vec.sort_by(|a, b| b.1.cmp(&a.1));
     tool_data_vec.truncate(20);
-    let tool_data: Vec<Value> = tool_data_vec.into_iter()
-        .map(|(t, c)| serde_json::json!({"tool": t, "count": c}))
+    let tool_data: Vec<ToolData> = tool_data_vec.into_iter()
+        .map(|(t, c)| ToolData { tool: t, count: c })
         .collect();
 
     // Hourly
     let mut hourly_counts: HashMap<i64, i64> = HashMap::new();
     for m in &user_messages {
-        let h = m["hour"].as_i64().unwrap_or(0);
-        *hourly_counts.entry(h).or_insert(0) += 1;
+        *hourly_counts.entry(m.hour).or_insert(0) += 1;
     }
-    let hourly_data: Vec<Value> = (0..24).map(|h| {
-        serde_json::json!({"hour": h, "count": hourly_counts.get(&h).copied().unwrap_or(0)})
+    let hourly_data: Vec<HourlyData> = (0..24).map(|h| {
+        HourlyData { hour: h, count: hourly_counts.get(&h).copied().unwrap_or(0) }
     }).collect();
 
     // Session durations
-    let mut session_durations: Vec<Value> = Vec::new();
+    let mut session_durations: Vec<SessionDuration> = Vec::new();
     for s in &sessions_meta {
-        let first_ts = s["first_ts"].as_str().unwrap_or("");
-        let last_ts = s["last_ts"].as_str().unwrap_or("");
-        if let (Some(t1), Some(t2)) = (parse_timestamp(first_ts), parse_timestamp(last_ts)) {
+        if let (Some(t1), Some(t2)) = (parse_timestamp(&s.first_ts), parse_timestamp(&s.last_ts)) {
             let dur = (t2 - t1).num_seconds() as f64 / 60.0;
             let t1_local = apply_tz_offset(&t1, tz_offset);
-            let msg_count = s["user_msgs"].as_i64().unwrap_or(0) + s["assistant_msgs"].as_i64().unwrap_or(0);
+            let msg_count = s.user_msgs + s.assistant_msgs;
             let msgs_per_min = if dur > 0.0 { (msg_count as f64 / dur * 100.0).round() / 100.0 } else { 0.0 };
-            session_durations.push(serde_json::json!({
-                "session_id": s["session_id"],
-                "project": s["project"],
-                "duration_min": (dur * 10.0).round() / 10.0,
-                "user_msgs": s["user_msgs"],
-                "assistant_msgs": s["assistant_msgs"],
-                "tool_uses": s["tool_uses"],
-                "date": t1_local.format("%Y-%m-%d").to_string(),
-                "start_hour": t1_local.hour(),
-                "msgs_per_min": msgs_per_min,
-                "git_branch": s["git_branch"],
-            }));
+            session_durations.push(SessionDuration {
+                session_id: s.session_id.clone(),
+                project: s.project.clone(),
+                duration_min: (dur * 10.0).round() / 10.0,
+                user_msgs: s.user_msgs,
+                assistant_msgs: s.assistant_msgs,
+                tool_uses: s.tool_uses,
+                date: t1_local.format("%Y-%m-%d").to_string(),
+                start_hour: t1_local.hour(),
+                msgs_per_min,
+                git_branch: s.git_branch.clone(),
+            });
         }
     }
 
     // Weekly
     let mut weekly_agg: HashMap<String, (i64, HashSet<String>)> = HashMap::new();
     for m in &user_messages {
-        let ts_str = m["timestamp"].as_str().unwrap_or("");
-        if let Some(dt) = parse_timestamp(ts_str) {
+        if let Some(dt) = parse_timestamp(&m.timestamp) {
             let week = dt.format("%Y-W%V").to_string();
             let entry = weekly_agg.entry(week).or_insert((0, HashSet::new()));
             entry.0 += 1;
-            entry.1.insert(m["session_id"].as_str().unwrap_or("").to_string());
+            entry.1.insert(m.session_id.clone());
         }
     }
-    let mut weekly_data: Vec<Value> = weekly_agg.into_iter().map(|(w, (u, s))| {
-        serde_json::json!({"week": w, "user_msgs": u, "sessions": s.len()})
+    let mut weekly_data: Vec<WeeklyData> = weekly_agg.into_iter().map(|(w, (u, s))| {
+        WeeklyData { week: w, user_msgs: u, sessions: s.len() as i64 }
     }).collect();
-    weekly_data.sort_by(|a, b| a["week"].as_str().unwrap_or("").cmp(b["week"].as_str().unwrap_or("")));
+    weekly_data.sort_by(|a, b| a.week.cmp(&b.week));
 
     // Efficiency by start hour
     struct HourEff {
@@ -981,24 +1302,23 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     }
     let mut hour_eff: HashMap<u32, HourEff> = HashMap::new();
     for sd in &session_durations {
-        let h = sd["start_hour"].as_u64().unwrap_or(0) as u32;
-        let entry = hour_eff.entry(h).or_insert(HourEff { total_msgs: 0, sessions: 0, duration_total: 0.0 });
-        entry.total_msgs += sd["user_msgs"].as_i64().unwrap_or(0) + sd["assistant_msgs"].as_i64().unwrap_or(0);
+        let entry = hour_eff.entry(sd.start_hour).or_insert(HourEff { total_msgs: 0, sessions: 0, duration_total: 0.0 });
+        entry.total_msgs += sd.user_msgs + sd.assistant_msgs;
         entry.sessions += 1;
-        entry.duration_total += sd["duration_min"].as_f64().unwrap_or(0.0);
+        entry.duration_total += sd.duration_min;
     }
-    let mut efficiency_data: Vec<Value> = hour_eff.into_iter()
+    let mut efficiency_data: Vec<EfficiencyData> = hour_eff.into_iter()
         .filter(|(_, e)| e.sessions > 0)
         .map(|(h, e)| {
-            serde_json::json!({
-                "hour": h,
-                "avg_msgs_per_session": (e.total_msgs as f64 / e.sessions as f64 * 10.0).round() / 10.0,
-                "avg_duration": (e.duration_total / e.sessions as f64 * 10.0).round() / 10.0,
-                "sessions": e.sessions,
-            })
+            EfficiencyData {
+                hour: h,
+                avg_msgs_per_session: (e.total_msgs as f64 / e.sessions as f64 * 10.0).round() / 10.0,
+                avg_duration: (e.duration_total / e.sessions as f64 * 10.0).round() / 10.0,
+                sessions: e.sessions,
+            }
         })
         .collect();
-    efficiency_data.sort_by(|a, b| a["hour"].as_u64().unwrap_or(0).cmp(&b["hour"].as_u64().unwrap_or(0)));
+    efficiency_data.sort_by(|a, b| a.hour.cmp(&b.hour));
 
     // Working hours estimate
     struct DaySpan {
@@ -1006,15 +1326,14 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     }
     let mut daily_spans: HashMap<String, DaySpan> = HashMap::new();
     for m in &user_messages {
-        let ts_str = m["timestamp"].as_str().unwrap_or("");
-        if let Some(parsed) = parse_timestamp(ts_str) {
+        if let Some(parsed) = parse_timestamp(&m.timestamp) {
             let dt = apply_tz_offset(&parsed, tz_offset);
             let day = dt.format("%Y-%m-%d").to_string();
             daily_spans.entry(day).or_insert(DaySpan { times: Vec::new() }).times.push(dt);
         }
     }
 
-    let mut work_days: Vec<Value> = Vec::new();
+    let mut work_days: Vec<WorkDay> = Vec::new();
     let mut sorted_days: Vec<(String, DaySpan)> = daily_spans.into_iter().collect();
     sorted_days.sort_by(|a, b| a.0.cmp(&b.0));
     for (day, mut span) in sorted_days {
@@ -1026,98 +1345,93 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
             active_secs += gap.min(1800.0);
         }
         let active_hrs = active_secs / 3600.0;
-        work_days.push(serde_json::json!({
-            "date": day,
-            "first": span.times.first().unwrap().format("%H:%M").to_string(),
-            "last": span.times.last().unwrap().format("%H:%M").to_string(),
-            "span_hrs": (span_hrs * 10.0).round() / 10.0,
-            "active_hrs": (active_hrs * 10.0).round() / 10.0,
-            "prompts": span.times.len(),
-        }));
+        work_days.push(WorkDay {
+            date: day,
+            first: span.times.first().unwrap().format("%H:%M").to_string(),
+            last: span.times.last().unwrap().format("%H:%M").to_string(),
+            span_hrs: (span_hrs * 10.0).round() / 10.0,
+            active_hrs: (active_hrs * 10.0).round() / 10.0,
+            prompts: span.times.len() as i64,
+        });
     }
 
     // Prompt analysis
     let mut cat_counts: HashMap<String, i64> = HashMap::new();
     let mut lb_counts: HashMap<String, i64> = HashMap::new();
 
-    struct ProjQuality {
+    struct ProjQualityAccum {
         count: i64,
         total_len: i64,
         confirms: i64,
         detailed: i64,
         cats: HashMap<String, i64>,
     }
-    let mut proj_quality: HashMap<String, ProjQuality> = HashMap::new();
+    let mut proj_quality: HashMap<String, ProjQualityAccum> = HashMap::new();
 
     for p in &prompts {
-        let cat = p["category"].as_str().unwrap_or("").to_string();
-        let lb = p["length_bucket"].as_str().unwrap_or("").to_string();
-        let proj = p["project"].as_str().unwrap_or("").to_string();
-        let full_len = p["full_length"].as_i64().unwrap_or(0);
+        *cat_counts.entry(p.category.clone()).or_insert(0) += 1;
+        *lb_counts.entry(p.length_bucket.clone()).or_insert(0) += 1;
 
-        *cat_counts.entry(cat.clone()).or_insert(0) += 1;
-        *lb_counts.entry(lb).or_insert(0) += 1;
-
-        let pq = proj_quality.entry(proj).or_insert(ProjQuality {
+        let pq = proj_quality.entry(p.project.clone()).or_insert(ProjQualityAccum {
             count: 0, total_len: 0, confirms: 0, detailed: 0, cats: HashMap::new(),
         });
         pq.count += 1;
-        pq.total_len += full_len;
-        if cat == "confirmation" || cat == "micro" {
+        pq.total_len += p.full_length;
+        if p.category == "confirmation" || p.category == "micro" {
             pq.confirms += 1;
         }
-        if full_len > 100 {
+        if p.full_length > 100 {
             pq.detailed += 1;
         }
-        *pq.cats.entry(cat).or_insert(0) += 1;
+        *pq.cats.entry(p.category.clone()).or_insert(0) += 1;
     }
 
     let total_prompts = prompts.len() as i64;
     let avg_length = if total_prompts > 0 {
-        (prompts.iter().map(|p| p["full_length"].as_i64().unwrap_or(0)).sum::<i64>() as f64 / total_prompts as f64).round() as i64
+        (prompts.iter().map(|p| p.full_length).sum::<i64>() as f64 / total_prompts as f64).round() as i64
     } else {
         0
     };
 
-    let categories: Vec<Value> = {
+    let categories: Vec<CategoryStat> = {
         let mut sorted: Vec<(String, i64)> = cat_counts.into_iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
         sorted.into_iter().map(|(c, n)| {
             let pct = if total_prompts > 0 { (n as f64 / total_prompts as f64 * 1000.0).round() / 10.0 } else { 0.0 };
-            serde_json::json!({"cat": c, "count": n, "pct": pct})
+            CategoryStat { cat: c, count: n, pct }
         }).collect()
     };
 
     let bucket_order = ["micro (<20)", "short (20-50)", "medium (50-150)", "detailed (150-500)", "comprehensive (500+)"];
-    let length_buckets: Vec<Value> = bucket_order.iter().map(|b| {
+    let length_buckets: Vec<LengthBucketStat> = bucket_order.iter().map(|b| {
         let count = lb_counts.get(*b).copied().unwrap_or(0);
         let pct = if total_prompts > 0 { (count as f64 / total_prompts as f64 * 1000.0).round() / 10.0 } else { 0.0 };
-        serde_json::json!({"bucket": b, "count": count, "pct": pct})
+        LengthBucketStat { bucket: b.to_string(), count, pct }
     }).collect();
 
-    let mut project_quality: Vec<Value> = proj_quality.into_iter()
+    let mut project_quality_data: Vec<ProjectQuality> = proj_quality.into_iter()
         .filter(|(_, d)| d.count >= 5)
         .map(|(p, d)| {
             let top_cat = d.cats.iter().max_by_key(|(_, v)| *v).map(|(k, _)| k.clone()).unwrap_or_default();
-            serde_json::json!({
-                "project": p,
-                "count": d.count,
-                "avg_len": (d.total_len as f64 / d.count as f64).round() as i64,
-                "confirm_pct": (d.confirms as f64 / d.count as f64 * 1000.0).round() / 10.0,
-                "detailed_pct": (d.detailed as f64 / d.count as f64 * 1000.0).round() / 10.0,
-                "top_cat": top_cat,
-            })
+            ProjectQuality {
+                project: p,
+                count: d.count,
+                avg_len: (d.total_len as f64 / d.count as f64).round() as i64,
+                confirm_pct: (d.confirms as f64 / d.count as f64 * 1000.0).round() / 10.0,
+                detailed_pct: (d.detailed as f64 / d.count as f64 * 1000.0).round() / 10.0,
+                top_cat,
+            }
         })
         .collect();
-    project_quality.sort_by(|a, b| b["count"].as_i64().unwrap_or(0).cmp(&a["count"].as_i64().unwrap_or(0)));
+    project_quality_data.sort_by(|a, b| b.count.cmp(&a.count));
 
-    let analysis = serde_json::json!({
-        "total_prompts": total_prompts,
-        "avg_length": avg_length,
-        "categories": categories,
-        "length_buckets": length_buckets,
-        "project_quality": project_quality,
-    });
+    let analysis = Analysis {
+        total_prompts,
+        avg_length,
+        categories,
+        length_buckets,
+        project_quality: project_quality_data,
+    };
 
     // === Model breakdown ===
     let total_output: i64 = model_counts.values().map(|v| v.output).sum();
@@ -1125,7 +1439,7 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
     let total_cache_read: i64 = model_counts.values().map(|v| v.cache_read).sum();
     let total_cache_write: i64 = model_counts.values().map(|v| v.cache_write).sum();
 
-    let model_breakdown: Vec<Value> = {
+    let model_breakdown: Vec<ModelBreakdown> = {
         let mut sorted: Vec<(String, &ModelAccum)> = model_counts.iter().map(|(k, v)| (k.clone(), v)).collect();
         sorted.sort_by(|a, b| b.1.msgs.cmp(&a.1.msgs));
         sorted.into_iter().map(|(raw_model, counts)| {
@@ -1135,155 +1449,142 @@ pub fn parse_all_sessions(claude_dir: &Path, tz_offset: Option<i32>, since_date:
                 + counts.output as f64 / 1_000_000.0 * cost_tier.output
                 + counts.cache_read as f64 / 1_000_000.0 * cost_tier.cache_read
                 + counts.cache_write as f64 / 1_000_000.0 * cost_tier.cache_write;
-            serde_json::json!({
-                "model": raw_model,
-                "display": display,
-                "msgs": counts.msgs,
-                "input_tokens": counts.input,
-                "output_tokens": counts.output,
-                "cache_read_tokens": counts.cache_read,
-                "cache_write_tokens": counts.cache_write,
-                "estimated_cost": (cost * 100.0).round() / 100.0,
-            })
+            ModelBreakdown {
+                model: raw_model,
+                display,
+                msgs: counts.msgs,
+                input_tokens: counts.input,
+                output_tokens: counts.output,
+                cache_read_tokens: counts.cache_read,
+                cache_write_tokens: counts.cache_write,
+                estimated_cost: (cost * 100.0).round() / 100.0,
+            }
         }).collect()
     };
 
     // === Cost estimation ===
-    let mut total_cost: f64 = model_breakdown.iter().map(|m| m["estimated_cost"].as_f64().unwrap_or(0.0)).sum();
+    let mut total_cost: f64 = model_breakdown.iter().map(|m| m.estimated_cost).sum();
 
     // === Subagent analysis ===
     let mut subagent_data = parse_subagents(claude_dir, tz_offset);
 
     // Add subagent costs
     let mut subagent_cost: f64 = 0.0;
-    if let Some(mt) = subagent_data.get("model_tokens").and_then(|v| v.as_object()) {
-        for (raw_model, tokens) in mt {
-            let cost_tier = match_model_cost(raw_model);
-            let inp = tokens.get("input").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let out = tokens.get("output").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            let cr = tokens.get("cache_read").and_then(|v| v.as_f64()).unwrap_or(0.0);
-            subagent_cost += inp / 1_000_000.0 * cost_tier.input
-                + out / 1_000_000.0 * cost_tier.output
-                + cr / 1_000_000.0 * cost_tier.cache_read;
-        }
+    for (_raw_model, tokens) in &subagent_data.model_tokens {
+        let cost_tier = match_model_cost(_raw_model);
+        subagent_cost += tokens.input as f64 / 1_000_000.0 * cost_tier.input
+            + tokens.output as f64 / 1_000_000.0 * cost_tier.output
+            + tokens.cache_read as f64 / 1_000_000.0 * cost_tier.cache_read;
     }
-    subagent_data["estimated_cost"] = serde_json::json!((subagent_cost * 100.0).round() / 100.0);
+    subagent_data.estimated_cost = (subagent_cost * 100.0).round() / 100.0;
     total_cost += subagent_cost;
 
     // === Git branch data ===
-    let mut branch_data: Vec<Value> = branch_activity.into_iter().map(|(br, (msgs, sessions, projects))| {
-        serde_json::json!({
-            "branch": br,
-            "msgs": msgs,
-            "sessions": sessions.len(),
-            "projects": projects.into_iter().collect::<Vec<_>>(),
-        })
+    let mut branch_data: Vec<BranchData> = branch_activity.into_iter().map(|(br, (msgs, sessions, projects))| {
+        BranchData {
+            branch: br,
+            msgs,
+            sessions: sessions.len() as i64,
+            projects: projects.into_iter().collect(),
+        }
     }).collect();
-    branch_data.sort_by(|a, b| b["msgs"].as_i64().unwrap_or(0).cmp(&a["msgs"].as_i64().unwrap_or(0)));
+    branch_data.sort_by(|a, b| b.msgs.cmp(&a.msgs));
     branch_data.truncate(20);
 
     // === Context efficiency ===
-    let subagent_output_tokens = subagent_data["total_subagent_output_tokens"].as_i64().unwrap_or(0);
+    let subagent_output_tokens = subagent_data.total_subagent_output_tokens;
     let total_all_output = total_output + subagent_output_tokens;
-    let context_efficiency = serde_json::json!({
-        "tool_output_tokens": total_tool_result_tokens,
-        "conversation_tokens": total_conversation_tokens,
-        "tool_pct": (total_tool_result_tokens as f64 / total_output.max(1) as f64 * 1000.0).round() / 10.0,
-        "conversation_pct": (total_conversation_tokens as f64 / total_output.max(1) as f64 * 1000.0).round() / 10.0,
-        "thinking_blocks": thinking_count,
-        "subagent_output_tokens": subagent_output_tokens,
-        "subagent_pct": (subagent_output_tokens as f64 / total_all_output.max(1) as f64 * 1000.0).round() / 10.0,
-    });
+    let context_efficiency = ContextEfficiency {
+        tool_output_tokens: total_tool_result_tokens,
+        conversation_tokens: total_conversation_tokens,
+        tool_pct: (total_tool_result_tokens as f64 / total_output.max(1) as f64 * 1000.0).round() / 10.0,
+        conversation_pct: (total_conversation_tokens as f64 / total_output.max(1) as f64 * 1000.0).round() / 10.0,
+        thinking_blocks: thinking_count,
+        subagent_output_tokens,
+        subagent_pct: (subagent_output_tokens as f64 / total_all_output.max(1) as f64 * 1000.0).round() / 10.0,
+    };
 
     // === Version tracking ===
-    let version_data: Vec<Value> = {
+    let version_data: Vec<VersionData> = {
         let mut sorted: Vec<(String, i64)> = version_counts.into_iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
         sorted.truncate(10);
-        sorted.into_iter().map(|(v, c)| serde_json::json!({"version": v, "count": c})).collect()
+        sorted.into_iter().map(|(v, c)| VersionData { version: v, count: c }).collect()
     };
 
     // === Skill/MCP usage ===
-    let skill_data: Vec<Value> = {
+    let skill_data: Vec<SkillData> = {
         let mut sorted: Vec<(String, i64)> = skill_usage.into_iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
         sorted.truncate(15);
-        sorted.into_iter().map(|(s, c)| serde_json::json!({"skill": s, "count": c})).collect()
+        sorted.into_iter().map(|(s, c)| SkillData { skill: s, count: c }).collect()
     };
 
     // === Slash command usage ===
-    let slash_command_data: Vec<Value> = {
+    let slash_command_data: Vec<SlashCommandData> = {
         let mut sorted: Vec<(String, i64)> = slash_commands.into_iter().collect();
         sorted.sort_by(|a, b| b.1.cmp(&a.1));
         sorted.truncate(15);
-        sorted.into_iter().map(|(cmd, c)| serde_json::json!({"command": cmd, "count": c})).collect()
+        sorted.into_iter().map(|(cmd, c)| SlashCommandData { command: cmd, count: c }).collect()
     };
 
     // Config
     let config = parse_config(claude_dir);
 
-    let summary = serde_json::json!({
-        "total_sessions": sessions_meta.len(),
-        "total_user_msgs": user_messages.len(),
-        "total_assistant_msgs": asst_messages.len(),
-        "total_tool_calls": asst_messages.iter().map(|m| m["tool_uses"].as_array().map(|a| a.len() as i64).unwrap_or(0)).sum::<i64>(),
-        "total_output_tokens": total_output,
-        "total_input_tokens": total_input,
-        "total_cache_read_tokens": total_cache_read,
-        "total_cache_write_tokens": total_cache_write,
-        "date_range_start": all_dates.first().cloned().unwrap_or_default(),
-        "date_range_end": all_dates.last().cloned().unwrap_or_default(),
-        "since_date": since_date.unwrap_or(""),
-        "unique_projects": project_stats.len(),
-        "unique_tools": tool_data.len(),
-        "avg_session_duration": if session_durations.is_empty() { 0.0 } else {
-            let total: f64 = session_durations.iter().map(|s| s["duration_min"].as_f64().unwrap_or(0.0)).sum();
-            (total / session_durations.len() as f64 * 10.0).round() / 10.0
-        },
-        "tz_offset": tz_offset,
-        "tz_label": format!("UTC{:+}", tz_offset),
-        "estimated_cost": (total_cost * 100.0).round() / 100.0,
-    });
-
-    // Convert drilldown to Value
-    let drilldown_val: Value = {
-        let mut map = serde_json::Map::new();
-        for (date, projects) in drilldown {
-            let mut proj_map = serde_json::Map::new();
-            for (proj, entries) in projects {
-                proj_map.insert(proj, Value::Array(entries));
-            }
-            map.insert(date, Value::Object(proj_map));
-        }
-        Value::Object(map)
+    let total_tool_calls: i64 = asst_messages.iter().map(|m| m.tool_uses.len() as i64).sum();
+    let avg_session_duration = if session_durations.is_empty() {
+        0.0
+    } else {
+        let total: f64 = session_durations.iter().map(|s| s.duration_min).sum();
+        (total / session_durations.len() as f64 * 10.0).round() / 10.0
     };
 
-    let permission_modes_val: Value = serde_json::to_value(&permission_modes).unwrap_or(Value::Object(Default::default()));
+    let summary = Summary {
+        total_sessions: sessions_meta.len() as i64,
+        total_user_msgs: user_messages.len() as i64,
+        total_assistant_msgs: asst_messages.len() as i64,
+        total_tool_calls,
+        total_output_tokens: total_output,
+        total_input_tokens: total_input,
+        total_cache_read_tokens: total_cache_read,
+        total_cache_write_tokens: total_cache_write,
+        date_range_start: all_dates.first().cloned().unwrap_or_default(),
+        date_range_end: all_dates.last().cloned().unwrap_or_default(),
+        since_date: since_date.unwrap_or("").to_string(),
+        unique_projects: project_stats.len() as i64,
+        unique_tools: tool_data.len() as i64,
+        avg_session_duration,
+        tz_offset,
+        tz_label: format!("UTC{:+}", tz_offset),
+        estimated_cost: (total_cost * 100.0).round() / 100.0,
+        skipped_files,
+        skipped_lines,
+    };
 
-    Ok(serde_json::json!({
-        "dashboard": {
-            "summary": summary,
-            "daily": daily_data,
-            "heatmap": heatmap_data,
-            "projects": project_data,
-            "tools": tool_data,
-            "hourly": hourly_data,
-            "sessions": session_durations,
-            "weekly": weekly_data,
-            "efficiency": efficiency_data,
+    Ok(ParseResult {
+        dashboard: Dashboard {
+            summary,
+            daily: daily_data,
+            heatmap: heatmap_data,
+            projects: project_data,
+            tools: tool_data,
+            hourly: hourly_data,
+            sessions: session_durations,
+            weekly: weekly_data,
+            efficiency: efficiency_data,
         },
-        "drilldown": drilldown_val,
-        "analysis": analysis,
-        "prompts": prompts,
-        "work_days": work_days,
-        "models": model_breakdown,
-        "subagents": subagent_data,
-        "branches": branch_data,
-        "context_efficiency": context_efficiency,
-        "versions": version_data,
-        "skills": skill_data,
-        "slash_commands": slash_command_data,
-        "permission_modes": permission_modes_val,
-        "config": config,
-    }))
+        drilldown,
+        analysis,
+        prompts,
+        work_days,
+        models: model_breakdown,
+        subagents: subagent_data,
+        branches: branch_data,
+        context_efficiency,
+        versions: version_data,
+        skills: skill_data,
+        slash_commands: slash_command_data,
+        permission_modes,
+        config,
+    })
 }
