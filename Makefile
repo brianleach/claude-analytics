@@ -3,18 +3,43 @@
 VENV := .venv
 PYTHON := $(VENV)/bin/python
 
-# Default: install Python port with AI support
+# Install all ports
 install:
+	cd ports/typescript && npm install --silent
 	python3 -m venv $(VENV)
 	$(PYTHON) -m pip install -e "ports/python[ai]"
 
-# Run the Python port (primary, with AI recommendations)
+# Run a port: make run [PORT=ts|python|go|rust]
+PORT ?= ts
 run:
+ifeq ($(PORT),python)
 	$(PYTHON) -m claude_analytics
+else ifeq ($(PORT),ts)
+	cd ports/typescript && npx ts-node src/cli.ts
+else ifeq ($(PORT),go)
+	cd ports/go && go run .
+else ifeq ($(PORT),rust)
+	cd ports/rust && cargo run --release
+else
+	@echo "Unknown port: $(PORT). Use python, ts, go, or rust."
+	@exit 1
+endif
 
 # Run without AI (no API key needed)
+PORT_NOAPI ?= ts
 run-no-api:
+ifeq ($(PORT_NOAPI),python)
 	$(PYTHON) -m claude_analytics --no-api
+else ifeq ($(PORT_NOAPI),ts)
+	cd ports/typescript && npx ts-node src/cli.ts --no-api
+else ifeq ($(PORT_NOAPI),go)
+	cd ports/go && go run . -no-api
+else ifeq ($(PORT_NOAPI),rust)
+	cd ports/rust && cargo run --release -- --no-api
+else
+	@echo "Unknown port: $(PORT_NOAPI). Use python, ts, go, or rust."
+	@exit 1
+endif
 
 # Run tests
 test:
@@ -28,12 +53,3 @@ benchmark:
 sync-templates:
 	cp shared/template.html ports/go/template.html
 
-# Individual ports
-run-ts:
-	cd ports/typescript && npx ts-node src/cli.ts
-
-run-go:
-	cd ports/go && go run .
-
-run-rust:
-	cd ports/rust && cargo run --release

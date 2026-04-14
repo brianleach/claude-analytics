@@ -43,10 +43,18 @@ func printBanner() {
 }
 
 func loadEnvFile() {
-	// Try .env in current directory, then home directory
-	paths := []string{".env"}
-	if home, err := os.UserHomeDir(); err == nil {
-		paths = append(paths, filepath.Join(home, ".env"))
+	// Load .env from project root (two levels up from ports/go/)
+	exe, err := os.Executable()
+	if err != nil {
+		return
+	}
+	// Try relative to executable, then relative to cwd
+	paths := []string{
+		filepath.Join(filepath.Dir(exe), "..", "..", ".env"),
+		filepath.Join(filepath.Dir(exe), ".env"),
+	}
+	if wd, err := os.Getwd(); err == nil {
+		paths = append(paths, filepath.Join(wd, ".env"))
 	}
 	for _, p := range paths {
 		f, err := os.Open(p)
@@ -75,6 +83,7 @@ func loadEnvFile() {
 			}
 		}
 		f.Close()
+		break // stop after first found
 	}
 }
 

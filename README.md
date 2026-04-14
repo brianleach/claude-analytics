@@ -17,13 +17,17 @@ make install
 Add your Anthropic API key for the best results (AI-powered recommendations via Claude Opus, ~$0.15-0.25 per run):
 
 ```bash
-export ANTHROPIC_API_KEY=sk-ant-...
+cp .env.example .env
+# Edit .env and add your key (get one at https://console.anthropic.com/)
 ```
 
 Then run:
 
 ```bash
-make run
+make run                  # TypeScript (fastest, default)
+make run PORT=python      # Python (includes AI-powered recommendations)
+make run PORT=go          # Go
+make run PORT=rust        # Rust
 ```
 
 That's it. The report generates from your `~/.claude/` data and opens in your browser. If no API key is set, it still works — you'll get pattern-based recommendations instead of AI-powered ones.
@@ -32,30 +36,32 @@ You can also run without the API: `make run-no-api`
 
 ## Ports
 
-The tool is implemented in four languages. All ports produce the same interactive HTML report.
+The tool is implemented in four languages. All ports produce the same interactive HTML report with both AI-powered and heuristic recommendations.
 
 ```
 ports/
-  python/       ← primary, full features including AI recommendations
-  typescript/   ← full port, heuristic recommendations only
-  go/           ← full port, heuristic recommendations only
-  rust/         ← full port, heuristic recommendations only
+  typescript/   ← fastest (0.55s avg)
+  rust/         ← compiled, 0.72s avg
+  python/       ← 0.82s avg
+  go/           ← 1.12s avg
 ```
 
 ### Running each port
 
-**Python** (recommended — includes AI-powered analysis):
-```bash
-cd ports/python
-pip install -e ".[ai]"
-claude-analytics
-```
+All ports support `--no-api`, `--no-open`, `--since`, `--output`, `--claude-dir`, and `--tz-offset`.
 
-**TypeScript**:
+**TypeScript** (default, fastest):
 ```bash
 cd ports/typescript
 npm install
 npx ts-node src/cli.ts
+```
+
+**Python**:
+```bash
+cd ports/python
+pip install -e ".[ai]"
+claude-analytics
 ```
 
 **Go**:
@@ -78,13 +84,13 @@ cargo build --release
 Run `./benchmark.sh` from the repo root to race all four implementations against your data:
 
 ```
-TypeScript:  0.72s
-Python:      0.83s
-Go:          0.95s
-Rust:        1.14s
+TypeScript:  0.55s
+Rust:        0.72s
+Python:      0.82s
+Go:          1.12s
 ```
 
-All under 1 second for ~300MB of session data across 360 JSONL files. The AI recommendation step (Python only) adds ~45 seconds for the Opus API call.
+All under 1.2 seconds for ~300MB of session data across 360 JSONL files. The AI recommendation step adds ~45 seconds for the Opus API call.
 
 ## What You Get
 

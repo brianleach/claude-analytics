@@ -20,3 +20,4 @@ output/
 ports/go/claude-analytics
 ports/rust/target/
 ports/typescript/dist/
+.gstack/

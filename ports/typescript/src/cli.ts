@@ -151,7 +151,9 @@ Options:
 // ============================================================
 
 function loadEnv(): void {
-  const envPath = path.join(process.cwd(), ".env");
+  // Load .env from project root (two levels up from ports/typescript/)
+  const projectRoot = path.resolve(__dirname, "..", "..", "..");
+  const envPath = path.join(projectRoot, ".env");
   if (!fs.existsSync(envPath)) return;
   const content = fs.readFileSync(envPath, "utf-8");
   for (const line of content.split("\n")) {

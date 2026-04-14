@@ -53,8 +53,8 @@ def open_in_browser(filepath):
 
 
 def main():
-    # Load .env if present (for ANTHROPIC_API_KEY)
-    env_path = Path.cwd() / ".env"
+    # Load .env from project root (for ANTHROPIC_API_KEY)
+    env_path = Path(__file__).resolve().parent.parent.parent.parent / ".env"
     if env_path.exists():
         with open(env_path) as f:
             for line in f:
