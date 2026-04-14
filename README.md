@@ -4,7 +4,7 @@ A CLI tool that parses your local `~/.claude/` session data and generates an int
 
 Combines AI-powered analysis (Claude Opus) with pattern-based heuristics to coach you on prompt quality, model selection, workflow efficiency, and Claude Code features you might be missing.
 
-![Python 3.8+](https://img.shields.io/badge/python-3.8+-44ddff?style=flat-square&labelColor=0a0a0a) ![License MIT](https://img.shields.io/badge/license-MIT-ffaa33?style=flat-square&labelColor=0a0a0a)
+![TypeScript](https://img.shields.io/badge/typescript-5.0+-44ddff?style=flat-square&labelColor=0a0a0a) ![Python 3.8+](https://img.shields.io/badge/python-3.8+-44ddff?style=flat-square&labelColor=0a0a0a) ![Go 1.21+](https://img.shields.io/badge/go-1.21+-44ddff?style=flat-square&labelColor=0a0a0a) ![Rust 1.70+](https://img.shields.io/badge/rust-1.70+-44ddff?style=flat-square&labelColor=0a0a0a) ![License MIT](https://img.shields.io/badge/license-MIT-ffaa33?style=flat-square&labelColor=0a0a0a)
 
 ## Quick Start
 
@@ -152,6 +152,10 @@ claude-analytics [OPTIONS]
 2. **Analyze** -- categorizes prompts by intent, measures quality, calculates working patterns, detects best practices gaps
 3. **Recommend** -- dual system: Claude Opus API generates personalized coaching with real prompt rewrites (optional), pattern-based heuristics always run and detect anti-patterns like missing hooks, low test coverage, and model overuse
 4. **Render** -- injects everything into a self-contained HTML dashboard and opens it in your browser
+
+## Author
+
+[Brian Leach](https://www.linkedin.com/in/bleach/)
 
 ## License
 
