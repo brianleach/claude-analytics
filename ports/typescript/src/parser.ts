@@ -266,6 +266,8 @@ export interface DashboardSummary {
   tz_offset: number;
   tz_label: string;
   estimated_cost: number;
+  skipped_files: number;
+  skipped_lines: number;
 }
 
 export interface Dashboard {
@@ -787,6 +789,8 @@ export function parseAllSessions(
   let thinkingCount = 0;
   let totalToolResultTokens = 0;
   let totalConversationTokens = 0;
+  let skippedFiles = 0;
+  let skippedLines = 0;
   const skillUsage: Record<string, number> = {};
   const slashCommands: Record<string, number> = {};
   const permissionModes: Record<string, number> = {};
@@ -819,6 +823,7 @@ export function parseAllSessions(
         try {
           d = JSON.parse(trimmed);
         } catch {
+          skippedLines++;
           continue;
         }
 
@@ -1029,6 +1034,7 @@ export function parseAllSessions(
         }
       }
     } catch {
+      skippedFiles++;
       continue;
     }
 
@@ -1434,6 +1440,8 @@ export function parseAllSessions(
     tz_offset: tzOffset!,
     tz_label: `UTC${tzOffset! >= 0 ? "+" : ""}${tzOffset}`,
     estimated_cost: Math.round(totalCost * 100) / 100,
+    skipped_files: skippedFiles,
+    skipped_lines: skippedLines,
   };
 
   return {
