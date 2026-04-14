@@ -25,7 +25,7 @@ Then run:
 
 ```bash
 make run                  # TypeScript (fastest, default)
-make run PORT=python      # Python (includes AI-powered recommendations)
+make run PORT=python      # Python
 make run PORT=go          # Go
 make run PORT=rust        # Rust
 ```
