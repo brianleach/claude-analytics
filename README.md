@@ -155,7 +155,7 @@ claude-analytics [OPTIONS]
 
 ## Author
 
-[Brian Leach](https://www.linkedin.com/in/bleach/)
+[Brian Leach](https://www.linkedin.com/in/bleach/) — [I Built a Tool That Tells You If You're Actually Good at Claude Code](https://www.linkedin.com/posts/bleach_activity-7449940726718734336-b2l6)
 
 ## License
 
