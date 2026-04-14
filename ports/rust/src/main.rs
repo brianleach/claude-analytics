@@ -70,8 +70,17 @@ fn open_in_browser(filepath: &PathBuf) {
 }
 
 fn main() {
-    // Load .env file for ANTHROPIC_API_KEY (ignore if missing)
-    let _ = dotenv::dotenv();
+    // Load .env from project root (two levels up from ports/rust/)
+    let exe_dir = std::env::current_exe().ok().and_then(|p| p.parent().map(|d| d.to_path_buf()));
+    let cwd = std::env::current_dir().ok();
+    for dir in [exe_dir.as_ref().map(|d| d.join("../../.env")),
+                cwd.as_ref().map(|d| d.join(".env"))]
+        .into_iter().flatten() {
+        if dir.exists() {
+            let _ = dotenv::from_path(&dir);
+            break;
+        }
+    }
 
     let cli = Cli::parse();
 
@@ -132,14 +141,14 @@ fn main() {
         }
     };
 
-    let summary = &data["dashboard"]["summary"];
-    let total_sessions = summary["total_sessions"].as_i64().unwrap_or(0);
-    let unique_projects = summary["unique_projects"].as_i64().unwrap_or(0);
-    let total_user_msgs = summary["total_user_msgs"].as_i64().unwrap_or(0);
-    let total_prompts = data["analysis"]["total_prompts"].as_i64().unwrap_or(0);
-    let date_start = summary["date_range_start"].as_str().unwrap_or("");
-    let date_end = summary["date_range_end"].as_str().unwrap_or("");
-    let tz_label = summary["tz_label"].as_str().unwrap_or("");
+    let summary = &data.dashboard.summary;
+    let total_sessions = summary.total_sessions;
+    let unique_projects = summary.unique_projects;
+    let total_user_msgs = summary.total_user_msgs;
+    let total_prompts = data.analysis.total_prompts;
+    let date_start = &summary.date_range_start;
+    let date_end = &summary.date_range_end;
+    let tz_label = &summary.tz_label;
 
     println!("  {} sessions across {} projects", total_sessions, unique_projects);
     println!("  {} messages, {} prompts", total_user_msgs, total_prompts);
@@ -166,12 +175,8 @@ fn main() {
         println!("{}[4/5]{} Generating heuristic recommendations...", ORANGE, RESET);
     }
     let recommendations = analyzer::generate_recommendations(&data, use_api);
-    let rec_count = recommendations
-        .get("recommendations")
-        .and_then(|v| v.as_array())
-        .map(|a| a.len())
-        .unwrap_or(0);
-    let source = recommendations.get("source").and_then(|v| v.as_str()).unwrap_or("heuristic");
+    let rec_count = recommendations.recommendations.len();
+    let source = &recommendations.source;
     if source != "ai" && !cli.no_api {
         // AI was attempted but failed; count already printed by generate_recommendations
     }

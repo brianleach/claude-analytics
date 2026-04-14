@@ -3,29 +3,30 @@ use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use chrono::Local;
-use serde_json::Value;
+
+use crate::parser::{ParseResult, RecommendationsResult};
 
 const TEMPLATE: &str = include_str!("template.html");
 
-pub fn generate_html(data: &Value, recommendations: &Value) -> String {
-    let empty_arr = Value::Array(vec![]);
-    let empty_obj = Value::Object(Default::default());
-
+pub fn generate_html(data: &ParseResult, recommendations: &RecommendationsResult) -> String {
+    // Build a combined payload matching the template's expected shape.
+    // Since all our types derive Serialize, we construct a serde_json::Value
+    // from the typed structs for template injection.
     let payload = serde_json::json!({
-        "dashboard": data.get("dashboard").unwrap_or(&Value::Null),
-        "drilldown": data.get("drilldown").unwrap_or(&Value::Null),
-        "analysis": data.get("analysis").unwrap_or(&Value::Null),
+        "dashboard": data.dashboard,
+        "drilldown": data.drilldown,
+        "analysis": data.analysis,
         "recommendations": recommendations,
-        "work_days": data.get("work_days").unwrap_or(&empty_arr),
-        "models": data.get("models").unwrap_or(&empty_arr),
-        "subagents": data.get("subagents").unwrap_or(&empty_obj),
-        "branches": data.get("branches").unwrap_or(&empty_arr),
-        "context_efficiency": data.get("context_efficiency").unwrap_or(&empty_obj),
-        "versions": data.get("versions").unwrap_or(&empty_arr),
-        "skills": data.get("skills").unwrap_or(&empty_arr),
-        "slash_commands": data.get("slash_commands").unwrap_or(&empty_arr),
-        "permission_modes": data.get("permission_modes").unwrap_or(&empty_obj),
-        "config": data.get("config").unwrap_or(&empty_obj),
+        "work_days": data.work_days,
+        "models": data.models,
+        "subagents": data.subagents,
+        "branches": data.branches,
+        "context_efficiency": data.context_efficiency,
+        "versions": data.versions,
+        "skills": data.skills,
+        "slash_commands": data.slash_commands,
+        "permission_modes": data.permission_modes,
+        "config": data.config,
     });
 
     let payload_json = serde_json::to_string(&payload).unwrap_or_else(|_| "{}".to_string());
