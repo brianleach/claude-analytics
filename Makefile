@@ -17,6 +17,7 @@ ifeq ($(PORT),python)
 else ifeq ($(PORT),ts)
 	cd ports/typescript && npx ts-node src/cli.ts
 else ifeq ($(PORT),go)
+	cp shared/ai_prompt.txt shared/template.html shared/heuristic_rules.json ports/go/
 	cd ports/go && go run .
 else ifeq ($(PORT),rust)
 	cd ports/rust && cargo run --release
@@ -33,6 +34,7 @@ ifeq ($(PORT_NOAPI),python)
 else ifeq ($(PORT_NOAPI),ts)
 	cd ports/typescript && npx ts-node src/cli.ts --no-api
 else ifeq ($(PORT_NOAPI),go)
+	cp shared/ai_prompt.txt shared/template.html shared/heuristic_rules.json ports/go/
 	cd ports/go && go run . -no-api
 else ifeq ($(PORT_NOAPI),rust)
 	cd ports/rust && cargo run --release -- --no-api
@@ -49,8 +51,4 @@ test:
 benchmark:
 	./benchmark.sh
 
-# Sync shared files to Go (go:embed can't reference parent directories)
-sync-shared:
-	cp shared/template.html ports/go/template.html
-	cp shared/ai_prompt.txt ports/go/ai_prompt.txt
 
