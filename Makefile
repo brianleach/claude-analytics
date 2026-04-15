@@ -49,7 +49,8 @@ test:
 benchmark:
 	./benchmark.sh
 
-# Sync shared template to Go (go:embed can't follow symlinks)
-sync-templates:
+# Sync shared files to Go (go:embed can't reference parent directories)
+sync-shared:
 	cp shared/template.html ports/go/template.html
+	cp shared/ai_prompt.txt ports/go/ai_prompt.txt
 

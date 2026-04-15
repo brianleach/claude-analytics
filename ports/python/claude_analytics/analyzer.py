@@ -357,82 +357,31 @@ def get_ai_recommendations(analysis, summary, prompts_sample, work_days,
             for k, v in sorted(permission_modes.items(), key=lambda x: -x[1])
         )
 
-    prompt = f"""You are a senior Claude Code power user coaching another developer. You know Claude Code deeply — its features, hidden capabilities, and common anti-patterns. Your job: look at this developer's ACTUAL usage data and tell them exactly what to change.
+    # Load shared prompt template
+    prompt_path = Path(__file__).resolve().parent.parent.parent.parent / "shared" / "ai_prompt.txt"
+    with open(prompt_path) as f:
+        prompt_template = f.read()
 
-Rules for your recommendations:
-- NEVER be generic. Every sentence must reference a specific number, project name, or prompt from their data.
-- Quote their ACTUAL prompts in examples (from the samples below) and rewrite them better.
-- Know Claude Code features: CLAUDE.md files, /model switching (opus/sonnet/haiku), subagent types (Explore for search, general-purpose for code changes), permission modes, hooks, extended thinking, MCP integrations, /compact command, worktrees.
-- Think in terms of ROI: what change saves them the most time or money per effort?
-- Be blunt. If they're wasting money, say so with the dollar amount. If their prompts suck, show them why.
+    overview = (
+        f"- {analysis['total_prompts']} prompts across {summary['total_sessions']} sessions, {summary['unique_projects']} projects\n"
+        f"- Date range: {summary['date_range_start']} to {summary['date_range_end']}\n"
+        f"- Average prompt length: {analysis['avg_length']} chars\n"
+        f"- Estimated API cost: ${summary.get('estimated_cost', 0):.2f}\n"
+        f"- {work_summary}"
+    )
 
-## Their Data
-
-### Overview
-- {analysis['total_prompts']} prompts across {summary['total_sessions']} sessions, {summary['unique_projects']} projects
-- Date range: {summary['date_range_start']} to {summary['date_range_end']}
-- Average prompt length: {analysis['avg_length']} chars
-- Estimated API cost: ${summary.get('estimated_cost', 0):.2f}
-- {work_summary}
-
-### Prompt Categories (what they ask Claude to do)
-{cat_summary}
-
-### Prompt Length Distribution
-{len_summary}
-
-### Model Usage & Cost
-{model_text}
-
-### Subagent Usage
-{sa_text}
-
-### Context Window Efficiency
-{ce_text}
-
-### Git Branch Activity
-{branch_text}
-
-### Permission Modes
-{pm_text}
-
-### Project Quality Scores (per-project prompt patterns)
-{json.dumps(analysis['project_quality'][:8], indent=2)}
-
-### REAL Prompts From This User (use these in before/after examples)
-{sample_text}
-
-## Expert Best Practices (from Boris Cherny, Claude Code creator)
-Reference these when the user's data shows they're missing these patterns:
-- PostToolUse hooks to auto-format code (handles the last 10% of formatting, avoids CI failures)
-- /permissions to pre-allow safe commands instead of --dangerously-skip-permissions. Check into .claude/settings.json and share with team.
-- MCP integrations for Slack, BigQuery, Sentry, etc. — Claude should use ALL your tools, not just code.
-- For long-running tasks: verify work with a background agent, or use an AgentStop hook.
-- THE #1 TIP: Give Claude a way to verify its work. If it can run tests after every change, output quality jumps 2-3x.
-- CLAUDE.md should contain: project conventions, how to run tests, what to do automatically (don't ask).
-
-## Output Format
-
-Return a JSON array of 8-10 objects. Each object:
-- "title": imperative, max 8 words, no fluff (e.g. "Stop using Opus for grep" not "Consider optimizing model selection")
-- "severity": "high" (costs real money/time NOW), "medium" (compounds over weeks), "low" (polish)
-- "body": 2-4 sentences. MUST cite specific numbers from their data. Explain what's wrong AND the concrete impact (dollars saved, minutes recovered, bugs prevented).
-- "metric": their current number | target (e.g. "72% Opus spend | target: <30%")
-- "example": Show a REAL prompt they wrote, then show the improved version. Use this format:
-  "Before: [their actual prompt]\\nAfter: [your improved version]\\nWhy: [one sentence explaining the difference]"
-  OR show a Claude Code command/config they should use.
-
-Ordering: HIGH items first, then MEDIUM, then LOW.
-
-Focus areas (skip if their data doesn't support it):
-1. Money: Are they burning cash on expensive models for simple tasks?
-2. Prompt craft: Show before/after rewrites of their weakest prompts
-3. Feature gaps: Claude Code features they're clearly not using (based on absence in data)
-4. Session hygiene: Are sessions too long? Too many compactions? Context bloat?
-5. Workflow: Could they batch, parallelize, or automate?
-6. Testing/quality: Are they debugging more than building?
-
-Return ONLY the JSON array. No markdown fences, no commentary outside the array."""
+    prompt = (prompt_template
+        .replace("{{overview}}", overview)
+        .replace("{{categories}}", cat_summary)
+        .replace("{{length_distribution}}", len_summary)
+        .replace("{{model_usage}}", model_text)
+        .replace("{{subagent_usage}}", sa_text)
+        .replace("{{context_efficiency}}", ce_text)
+        .replace("{{branch_activity}}", branch_text)
+        .replace("{{permission_modes}}", pm_text)
+        .replace("{{project_quality}}", json.dumps(analysis['project_quality'][:8], indent=2))
+        .replace("{{sample_prompts}}", sample_text)
+    )
 
     # Spinner runs in a background thread during the API call
     stop_spinner = threading.Event()
