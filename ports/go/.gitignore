@@ -1,2 +1,7 @@
 # Claude Analytics reports (contain sensitive data)
 output/
+
+# Copied from shared/ at build time (go:embed can't reference parent dirs)
+ai_prompt.txt
+template.html
+heuristic_rules.json
